@@ -1,0 +1,25 @@
+# Logs
+logs/
+
+# Screenshots
+screenshots/
+
+# Chrome profile
+chrome_profile/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+venv/
+env/
+
+# Streamlit cache
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+streamlit>=1.56.0
+mysql-connector-python>=8.0.0
+undetected-chromedriver>=3.5.0
+selenium>=4.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
