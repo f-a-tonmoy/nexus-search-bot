@@ -462,10 +462,10 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
 
     # Clear screenshots folder before each run
     screenshots_dir = os.path.join(BASE_DIR, 'screenshots')
-    if os.path.exists(screenshots_dir):
-        for f in os.listdir(screenshots_dir):
-            if f.endswith('.png'):
-                os.remove(os.path.join(screenshots_dir, f))
+    os.makedirs(screenshots_dir, exist_ok=True)
+    for f in os.listdir(screenshots_dir):
+        if f.endswith('.png'):
+            os.remove(os.path.join(screenshots_dir, f))
     log.debug('Screenshots folder cleared')
 
     log.info(f'{"="*60}')
@@ -508,15 +508,6 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
                     all_raw_urls.append(url)
                 log.info(f'  {engine} p{page_no}: {len(urls)} URLs | total so far: {len(all_raw_urls)}')
                 status(f'Found {len(urls)} URLs from {engine} page {page_no}')
-
-        # Delay between engines (not after last)
-        if engine_idx < total_engines:
-            lo, hi = ENGINE_DELAYS[engine]
-            delay = random.uniform(lo, hi)
-            log.info(f'  [{engine}] waiting {delay:.1f}s before next engine...')
-            log.debug(f'Inter-engine delay: {delay:.1f}s')
-            status(f'Pausing {delay:.0f}s before next engine to avoid rate limiting...')
-            time.sleep(delay)
 
     log.info(f'All engines done. Total raw URLs: {len(all_raw_urls)}')
     status(f'All engines scraped. {len(all_raw_urls)} total raw URLs collected.')
