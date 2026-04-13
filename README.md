@@ -1,5 +1,5 @@
-# NEXUS — Multi-Engine Web Search Intelligence Bot
-**DSE I2400 — Project 1 | CUNY MS Data Science, City College of New York**
+# NEXUS - Multi-Engine Web Search Intelligence Bot
+**DSE I2400 - Project 1 | CUNY MS Data Science, City College of New York**
 
 NEXUS is a full-stack data ingestion engine that scrapes multiple search engines, deduplicates and validates URLs, counts keyword frequency across result pages, and ranks them through a Streamlit GUI.
 
@@ -152,11 +152,11 @@ NEXUS Streamlit GUI
 
 ## Key Design Decisions
 
-- **One browser per engine** — driver stays open across all pages per engine, reducing Chrome startup overhead
-- **Canonical URL via redirect** — `response.url` after following redirects used as canonical form, ensuring cross-engine deduplication works correctly
-- **`clean_url_engines` table** — tracks multi-engine attribution per URL accurately via FK, enabling reliable `source_engine_count`
-- **Tracking param stripping** — `utm_*`, `msclkid`, `gclid` removed before validation to prevent duplicate URLs from ad tracking
-- **`raw_url_id_map` as list** — stores all `(raw_id, engine)` pairs per URL to capture multi-engine provenance before deduplication
+- **One browser per engine** - driver stays open across all pages per engine, reducing Chrome startup overhead
+- **Canonical URL via redirect** - `response.url` after following redirects used as canonical form, ensuring cross-engine deduplication works correctly
+- **`clean_url_engines` table** - tracks multi-engine attribution per URL accurately via FK, enabling reliable `source_engine_count`
+- **Tracking param stripping** - `utm_*`, `msclkid`, `gclid` removed before validation to prevent duplicate URLs from ad tracking
+- **`raw_url_id_map` as list** - stores all `(raw_id, engine)` pairs per URL to capture multi-engine provenance before deduplication
 
 ---
 
