@@ -33,8 +33,7 @@ nexus-search-bot/
 
 - Python 3.10+
 - MySQL 8.0+
-- Brave Browser (Nightly) installed at:
-  `C:\Program Files\BraveSoftware\Brave-Browser-Nightly\Application\brave.exe`
+- Brave Browser or any Chromium-based browser
 
 ---
 
