@@ -1,4 +1,4 @@
-#NEXUS — Multi-Engine Search Intelligence
+# NEXUS — Multi-Engine Search Intelligence
 
 NEXUS is a web search aggregation and relevance ranking engine. It scrapes Google, Bing, Yahoo, and DuckDuckGo simultaneously, validates and deduplicates the results, scores each URL by keyword relevance using phrase-weighted frequency analysis, and surfaces the most relevant results through a Streamlit GUI.
 
