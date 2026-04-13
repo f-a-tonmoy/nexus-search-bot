@@ -65,9 +65,31 @@ def setup_logger():
 # ---------------------------------------------------------------------------
 
 def extract_keywords(search_term):
+    """Extract individual keywords after removing stop words."""
     words = re.findall(r'[a-z]+', search_term.lower())
     keywords = [w for w in words if w not in STOP_WORDS and len(w) > 2]
     return keywords
+
+
+def extract_phrases(search_term):
+    """
+    Extract meaningful 2-3 word phrases from the search term.
+    These are counted with a higher weight than individual keywords.
+    Example: 'childhood cancer treatment best hospitals usa'
+    → ['childhood cancer', 'cancer treatment', 'childhood cancer treatment']
+    """
+    words = re.findall(r'[a-z]+', search_term.lower())
+    meaningful = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+
+    phrases = []
+    # Bigrams
+    for i in range(len(meaningful) - 1):
+        phrases.append(f'{meaningful[i]} {meaningful[i+1]}')
+    # Trigrams
+    for i in range(len(meaningful) - 2):
+        phrases.append(f'{meaningful[i]} {meaningful[i+1]} {meaningful[i+2]}')
+
+    return phrases
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +117,20 @@ def fetch_page_text(url, timeout=10):
         return None, str(e)
 
 
-def count_keywords(text, keywords):
-    counts = {kw: text.count(kw) for kw in keywords}
-    total = sum(counts.values())
-    return counts, total
+def count_keywords(text, keywords, phrases):
+    """
+    Score a page using both individual keywords and phrases.
+    Phrases are weighted 3x to reward contextually relevant pages.
+    Individual keywords count as 1x.
+    """
+    # Individual keyword counts (weight 1x)
+    kw_score = sum(text.count(kw) for kw in keywords)
+
+    # Phrase counts (weight 3x -- phrases are more specific)
+    phrase_score = sum(text.count(ph) * 3 for ph in phrases)
+
+    total = kw_score + phrase_score
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +159,11 @@ def get_source_engine_count(conn, clean_url_id, search_term_id):
 # ---------------------------------------------------------------------------
 
 def process_url(args):
-    url, clean_url_id, search_term_id, keywords = args
+    url, clean_url_id, search_term_id, keywords, phrases = args
     text, error = fetch_page_text(url)
     if text is None:
         return clean_url_id, search_term_id, url, 0, error
-    _, total = count_keywords(text, keywords)
+    total = count_keywords(text, keywords, phrases)
     return clean_url_id, search_term_id, url, total, None
 
 
@@ -165,7 +197,9 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
     log.info(f'{"="*60}')
 
     keywords = extract_keywords(search_term)
+    phrases = extract_phrases(search_term)
     log.info(f'Keywords ({len(keywords)}): {keywords}')
+    log.info(f'Phrases  ({len(phrases)}): {phrases}')
 
     conn = get_db_connection()
     if not conn:
@@ -209,7 +243,7 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
     status(f'Counting keyword frequencies for {len(rows)} URLs...')
 
     args_list = [
-        (row['url'], row['id'], search_term_id, keywords)
+        (row['url'], row['id'], search_term_id, keywords, phrases)
         for row in rows
     ]
 
