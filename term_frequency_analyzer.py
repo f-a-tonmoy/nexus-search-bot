@@ -119,18 +119,21 @@ def fetch_page_text(url, timeout=10):
 
 def count_keywords(text, keywords, phrases):
     """
-    Score a page using both individual keywords and phrases.
-    Phrases are weighted 3x to reward contextually relevant pages.
-    Individual keywords count as 1x.
+    Score a page using individual keywords and phrases.
+    Weights scale linearly with phrase length:
+      - Individual keywords (1-gram): 1x
+      - Bigrams:                      2x
+      - Trigrams:                     3x
     """
-    # Individual keyword counts (weight 1x)
     kw_score = sum(text.count(kw) for kw in keywords)
 
-    # Phrase counts (weight 3x -- phrases are more specific)
-    phrase_score = sum(text.count(ph) * 3 for ph in phrases)
+    phrase_score = 0
+    for ph in phrases:
+        word_count = len(ph.split())
+        weight = word_count  # 2 for bigram, 3 for trigram
+        phrase_score += text.count(ph) * weight
 
-    total = kw_score + phrase_score
-    return total
+    return kw_score + phrase_score
 
 
 # ---------------------------------------------------------------------------

@@ -20,8 +20,10 @@ Multi-engine attribution is tracked via a dedicated `clean_url_engines` table --
 Each validated URL is fetched and its visible text extracted using BeautifulSoup (scripts, styles, nav, footer stripped). A phrase-weighted scoring model counts both individual keyword matches and multi-word phrase matches:
 
 - Individual keywords: 1x weight
-- Bigrams (e.g. `childhood cancer`): 3x weight
+- Bigrams (e.g. `childhood cancer`): 2x weight
 - Trigrams (e.g. `childhood cancer treatment`): 3x weight
+
+Weights scale linearly with phrase length -- a trigram match is three times as specific as a single keyword match.
 
 This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently. Scores and engine counts are written to `url_frequency` and results are ranked by `term_occurrences DESC, engine_count DESC`.
 
@@ -183,7 +185,7 @@ python clear_database.py
 - **Parallel scraping** - all engines run simultaneously in separate threads, each with its own browser session and DB connection, protected by a global driver init lock to avoid chromedriver binary conflicts on Windows
 - **Canonical URL via redirect** - `response.url` after following redirects is used as the canonical form, ensuring www vs non-www variants of the same page deduplicate correctly
 - **`clean_url_engines` table** - decouples engine attribution from URL storage, enabling accurate multi-engine count even when different engines return slightly different URL variants that resolve to the same canonical URL
-- **Phrase-weighted scoring** - bigrams and trigrams are counted at 3x the weight of individual keywords, rewarding contextually relevant pages over keyword-stuffed ones
+- **Phrase-weighted scoring** - weights scale linearly with phrase length: 1x for individual keywords, 2x for bigrams, 3x for trigrams. This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently
 - **Tracking param stripping** - `utm_*`, `msclkid`, `gclid` and other ad tracking parameters are removed before validation, preventing the same page from appearing multiple times with different tracking IDs
 
 ---
