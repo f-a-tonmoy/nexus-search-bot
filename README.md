@@ -8,7 +8,7 @@ NEXUS is a full-stack data ingestion engine that scrapes multiple search engines
 ## Project Structure
 
 ```
-Custom Bot/
+nexus-search-bot/
 ├── app.py                      # Streamlit GUI (NEXUS)
 ├── web_search_scraper.py       # Multi-engine scraping pipeline
 ├── term_frequency_analyzer.py  # Keyword frequency counter
@@ -16,10 +16,15 @@ Custom Bot/
 ├── clear_database.py           # Utility to wipe all tables
 ├── requirements.txt
 ├── nexus.sql                   # Schema export
+├── .gitignore
 ├── .streamlit/
 │   └── config.toml             # Theme configuration
-├── logs/                       # Auto-generated run logs
-└── screenshots/                # Auto-generated screenshots
+├── misc/
+│   ├── data_ingestion.py       # Early prototype (superseded)
+│   └── pipeline.ipynb          # Notebook prototype (superseded)
+├── logs/                       # Auto-generated run logs (gitignored)
+├── screenshots/                # Auto-generated screenshots (gitignored)
+└── chrome_profile/             # Browser profile (gitignored)
 ```
 
 ---
