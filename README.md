@@ -8,17 +8,17 @@ NEXUS is a web search aggregation and relevance ranking engine. It scrapes Googl
 
 NEXUS runs a three-stage ETL pipeline:
 
-**1. Extract - Web Scraping**
+#### *Extract - Web Scraping*
 
 Four search engines are scraped in parallel using `undetected_chromedriver` with Brave Browser. Each engine gets its own isolated browser session and DB connection. URLs are extracted via DOM selectors, unwrapped from redirect wrappers, and filtered for noise (ads, social media, search engine internals).
 
-**2. Transform - Validation and Deduplication**
+#### *Transform - Validation and Deduplication*
 
 Raw URLs go through concurrent HEAD/GET validation to confirm reachability. Redirects are followed to their canonical form (`response.url`), and tracking parameters (`utm_*`, `msclkid`, `gclid`) are stripped before storage. This ensures URLs from different engines that redirect to the same page are correctly deduplicated.
 
 Multi-engine attribution is tracked via a dedicated `clean_url_engines` table -- if Google and DuckDuckGo both return the same URL, it's stored once in `clean_urls` but attributed to both engines. This powers the engine count signal used in ranking.
 
-**3. Load + Score - Frequency Analysis**
+#### *Load + Score - Frequency Analysis*
 
 Each validated URL is fetched and its visible text extracted using BeautifulSoup (scripts, styles, nav, footer stripped). A phrase-weighted scoring model counts both individual keyword matches and multi-word phrase matches:
 
