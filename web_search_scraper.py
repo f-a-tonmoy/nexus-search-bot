@@ -47,7 +47,13 @@ ENGINE_DELAYS = {
 }
 
 # Noise path patterns to exclude regardless of domain
-EXCLUDED_PATHS = {'/give', '/donate', '/donation', '/support/donate'}
+EXCLUDED_PATHS = {
+    '/give', '/donate', '/donation', '/support/donate',
+    '/profiles/', '/profile/', '/faculty/', '/staff/',
+    '/people/', '/person/', '/author/', '/authors/',
+    '/team/', '/about/team', '/biography/', '/bio/',
+    '/member/', '/members/', '/directory/',
+}
 
 EXCLUDED_DOMAINS = {
     'googleadservices.com', 'doubleclick.net', 'googlesyndication.com',
@@ -236,7 +242,11 @@ def is_noise_url(url):
     try:
         parsed = urlparse(url)
         path = parsed.path.rstrip('/')
+        # Check exact prefix match
         if any(path.startswith(p) for p in EXCLUDED_PATHS):
+            return True
+        # Check if any excluded segment appears anywhere in path
+        if any(p in path for p in EXCLUDED_PATHS):
             return True
     except Exception:
         pass
@@ -359,9 +369,11 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
 # ---------------------------------------------------------------------------
 
 TRACKING_PARAMS = {
-    'msclkid', 'gclid', 'fbclid', 'utm_source', 'utm_medium',
-    'utm_campaign', 'utm_term', 'utm_content', 'ad_group',
-    'pn_mapping', 'ref', 'referrer',
+    'msclkid', 'msockid', 'gclid', 'fbclid',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+    'ad_group', 'pn_mapping', 'ref', 'referrer',
+    'mc_cid', 'mc_eid', 'igshid', 'trk', 'trkInfo',
+    '_hsenc', '_hsmi', 'hsCtaTracking',
 }
 
 
@@ -522,7 +534,10 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
         finally:
             thread_conn.close()
 
-    status(f'Launching {total_engines} engines in parallel...')
+    if total_engines == 1:
+        status(f'Starting {active_engines[0]}...')
+    else:
+        status(f'Launching {total_engines} engines in parallel...')
     with concurrent.futures.ThreadPoolExecutor(max_workers=total_engines) as executor:
         futures = {
             executor.submit(scrape_and_store, engine): engine

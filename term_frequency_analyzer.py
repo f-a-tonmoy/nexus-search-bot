@@ -119,21 +119,34 @@ def fetch_page_text(url, timeout=10):
 
 def count_keywords(text, keywords, phrases):
     """
-    Score a page using individual keywords and phrases.
+    Score a page using individual keywords and phrases, normalized by page length.
     Weights scale linearly with phrase length:
       - Individual keywords (1-gram): 1x
       - Bigrams:                      2x
       - Trigrams:                     3x
+
+    Raw score is divided by log(word_count) to normalize for page length.
+    This prevents long pages (e.g. faculty profiles, CVs) from dominating
+    purely due to higher word count.
     """
+    import math
+
     kw_score = sum(text.count(kw) for kw in keywords)
 
     phrase_score = 0
     for ph in phrases:
         word_count = len(ph.split())
-        weight = word_count  # 2 for bigram, 3 for trigram
+        weight = word_count
         phrase_score += text.count(ph) * weight
 
-    return kw_score + phrase_score
+    raw_score = kw_score + phrase_score
+
+    # Normalize by log of page word count (minimum 1 to avoid division by zero)
+    page_word_count = max(len(text.split()), 1)
+    normalized = raw_score / math.log(page_word_count + 1)
+
+    # Return as integer score rounded to nearest whole number
+    return round(normalized)
 
 
 # ---------------------------------------------------------------------------

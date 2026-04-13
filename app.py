@@ -1,6 +1,7 @@
 import time
 import threading
 import streamlit as st
+import streamlit.components.v1 as components
 
 from database_operations import (
     get_db_connection,
@@ -218,9 +219,10 @@ st.markdown('''
         background-color: #2d3a8c !important;
     }
 
-    /* Hide slider min/max tick labels */
-    div[data-testid="stSlider"] div[data-testid="stTickBar"] {
-        display: none !important;
+    /* Green color for completed status label */
+    div[data-testid="stStatusWidget"] div[data-testid="stMarkdownContainer"] p {
+        color: #16a34a !important;
+        font-weight: 700 !important;
     }
     div[data-testid="stSlider"] div[role="slider"] {
         background-color: #2d3a8c !important;
@@ -410,7 +412,7 @@ search_input = st.text_input(
     label_visibility='collapsed',
 )
 
-# Autofill suggestions -- show while typing, before search button
+# Autofill suggestions
 if search_input and len(search_input) >= 3 and existing_terms:
     matches = [t for t in existing_terms if search_input.lower() in t.lower() and t.lower() != search_input.lower()]
     if matches:
@@ -428,19 +430,95 @@ search_btn = st.button('⬡  Search', use_container_width=True, type='primary')
 # Search logic
 # ---------------------------------------------------------------------------
 
+def render_log(placeholder, messages, animate_last=False):
+    if not messages:
+        return
+
+    completed = messages[:-1]
+    last_msg, last_color = messages[-1]
+
+    completed_html = ''.join(
+        f'<div style="font-family:Space Mono,monospace;font-size:0.95rem;'
+        f'color:{c if c else "var(--text-color)"};'
+        f'font-weight:{"700" if c else "600"};'
+        f'padding:2px 0;line-height:1.5;">› {m}</div>'
+        for m, c in completed
+    )
+
+    if animate_last:
+        words = last_msg.split()
+        word_spans = ''.join(
+            f'<span id="w{i}" style="opacity:0;transition:opacity 0.05s;">{w} </span>'
+            for i, w in enumerate(words)
+        )
+        last_html = (
+            f'<div style="font-family:Space Mono,monospace;font-size:0.95rem;'
+            f'color:{last_color if last_color else "var(--text-color)"};'
+            f'font-weight:{"700" if last_color else "600"};'
+            f'padding:2px 0;line-height:1.5;">› {word_spans}</div>'
+        )
+        js = f'''
+        <script>
+        (function() {{
+            var n = {len(words)};
+            for (var i = 0; i < n; i++) {{
+                (function(idx) {{
+                    setTimeout(function() {{
+                        var el = document.getElementById("w" + idx);
+                        if (el) el.style.opacity = "1";
+                        var log = document.getElementById("nexus-log");
+                        if (log) log.scrollTop = log.scrollHeight;
+                    }}, idx * 60);
+                }})(i);
+            }}
+        }})();
+        </script>'''
+    else:
+        last_html = (
+            f'<div style="font-family:Space Mono,monospace;font-size:0.95rem;'
+            f'color:{last_color if last_color else "var(--text-color)"};'
+            f'font-weight:{"700" if last_color else "600"};'
+            f'padding:2px 0;line-height:1.5;">› {last_msg}</div>'
+        )
+        js = '<script>var l=document.getElementById("nexus-log");if(l)l.scrollTop=l.scrollHeight;</script>'
+
+    html = f'''
+    <div id="nexus-log" style="max-height:300px;overflow-y:auto;padding-right:4px;">
+        {completed_html}{last_html}
+    </div>
+    {js}
+    '''
+    with placeholder:
+        components.html(html, height=320, scrolling=False)
+
+
 def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None):
     """Run scraper + frequency in a background thread, posting to status_queue."""
-    def post(msg):
-        if status_queue is not None:
-            status_queue.put(msg)
+    ACCENT = '#4361ee'
 
-    post(f'Initializing pipeline for: "{term}"')
+    # Messages that mark phase transitions -- shown in blue
+    PHASE_MARKERS = {
+        'All engines scraped.',
+        'Scraping complete.',
+        'Frequency analysis done.',
+    }
+
+    def post(msg, color=None):
+        if status_queue is not None:
+            if color is None:
+                for marker in PHASE_MARKERS:
+                    if msg.startswith(marker):
+                        color = ACCENT
+                        break
+            status_queue.put((msg, color) if color else msg)
+
+    post(f'Initializing pipeline for: "{term}"', color=ACCENT)
 
     term_id, clean_urls = run_pipeline(
         search_term=term,
         pages=pages,
         engines=engines,
-        status_callback=post,
+        status_callback=lambda m: post(m),
     )
 
     if not term_id:
@@ -448,12 +526,29 @@ def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None
         status_queue.put(None)
         return
 
-    post('Scraping complete. Starting frequency analysis...')
+    # Check total URLs in DB for this term vs what was just scraped
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM clean_urls WHERE search_term_id = %s', (term_id,))
+        total_in_db = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+
+        new_count = len(clean_urls)
+        if total_in_db > new_count:
+            post(f'{new_count} new URLs added from this run.')
+            post(
+                f'{total_in_db} URLs total in DB for this term.',
+                color='#f59e0b'
+            )
+
+    post('Scraping complete. Starting frequency analysis...', color=ACCENT)
 
     run_frequency(
         search_term_id=term_id,
         search_term=term,
-        status_callback=post,
+        status_callback=lambda m: post(m),
         force_rerun=force_rerun,
     )
 
@@ -498,12 +593,13 @@ def do_search(term, engines, pages, force_rerun=False):
             def update(msg):
                 messages.append(msg)
                 log_placeholder.markdown(
-                    '<div style="max-height:320px;overflow-y:auto;padding-right:4px;">' +
+                    '<div id="nexus-log" style="padding-right:4px;">' +
                     ''.join(
                         f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:var(--text-color);font-weight:600;padding:2px 0;line-height:1.4;">› {m}</div>'
                         for m in messages
                     ) +
-                    '</div>',
+                    '</div>'
+                    '<script>const el=document.getElementById("nexus-log");if(el)el.scrollTop=el.scrollHeight;</script>',
                     unsafe_allow_html=True
                 )
 
@@ -549,33 +645,26 @@ def do_search(term, engines, pages, force_rerun=False):
                     elapsed = time.time() - start_time
                     mins, secs = divmod(int(elapsed), 60)
                     duration = f'{mins}m {secs}s' if mins else f'{secs}s'
-                    messages.append(f'✔  Pipeline complete — {duration}')
-                    log_placeholder.markdown(
-                        '<div style="max-height:320px;overflow-y:auto;padding-right:4px;">' +
-                        ''.join(
-                            f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:{"#16a34a" if i == len(messages)-1 else "var(--text-color)"};font-weight:{"800" if i == len(messages)-1 else "600"};padding:2px 0;line-height:1.4;">› {m}</div>'
-                            for i, m in enumerate(messages)
-                        ) +
-                        '</div>',
-                        unsafe_allow_html=True
-                    )
-                    s.update(label=f'Pipeline complete — {duration}', state='complete', expanded=True)
+                    messages.append((f'Data ingestion complete — {duration}', '#16a34a'))
+                    render_log(log_placeholder, messages)
+                    s.update(label=f'Data ingestion complete — {duration}', state='complete', expanded=True)
                     break
                 else:
-                    # Typing animation -- reveal message character by character
-                    messages.append('')
-                    for char in item:
-                        messages[-1] += char
-                        log_placeholder.markdown(
-                            '<div style="max-height:320px;overflow-y:auto;padding-right:4px;">' +
-                            ''.join(
-                                f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:var(--text-color);font-weight:600;padding:2px 0;line-height:1.4;">› {m}{"▌" if i == len(messages)-1 else ""}</div>'
-                                for i, m in enumerate(messages)
-                            ) +
-                            '</div>',
-                            unsafe_allow_html=True
-                        )
-                        time.sleep(0.018)
+                    # Handle plain string or (msg, color) tuple
+                    if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], str) and item[1].startswith('#'):
+                        msg_text, msg_color = item
+                        messages.append((msg_text, msg_color))
+                    else:
+                        msg_text = item
+                        msg_color = None
+                        messages.append((msg_text, None))
+
+                    # Single render per message -- JS handles word-by-word reveal
+                    messages[-1] = (msg_text, msg_color)
+                    render_log(log_placeholder, messages, animate_last=True)
+                    # Wait for JS animation to finish before next message
+                    word_count = len(msg_text.split())
+                    time.sleep(word_count * 0.065 + 0.1)
             except Exception:
                 if not thread.is_alive():
                     break
