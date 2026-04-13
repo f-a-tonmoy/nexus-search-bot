@@ -3,6 +3,7 @@ import os
 import time
 import random
 import logging
+import threading
 from datetime import datetime
 from urllib.parse import urlparse, unquote
 
@@ -90,6 +91,9 @@ def setup_logger():
 # Browser
 # ---------------------------------------------------------------------------
 
+DRIVER_INIT_LOCK = threading.Lock()
+
+
 def driver_setup():
     options = uc.ChromeOptions()
     options.binary_location = BRAVE_PATH
@@ -113,11 +117,12 @@ def driver_setup():
     ]
     options.add_argument(f'--user-agent={random.choice(user_agents)}')
 
-    return uc.Chrome(
-        options=options,
-        browser_executable_path=BRAVE_PATH,
-        version_main=146
-    )
+    with DRIVER_INIT_LOCK:
+        return uc.Chrome(
+            options=options,
+            browser_executable_path=BRAVE_PATH,
+            version_main=146
+        )
 
 
 def get_search_url(search_term, engine_name, page_no=1):
@@ -488,26 +493,47 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
 
     all_raw_urls = []
     raw_url_id_map = {}
+    map_lock = threading.Lock()
+    startup_lock = threading.Lock()
     total_engines = len(active_engines)
 
-    for engine_idx, engine in enumerate(active_engines, 1):
-        log.info(f'[{engine_idx}/{total_engines}] {engine}')
-        status(f'Opening {engine}...')
+    def scrape_and_store(engine, startup_delay=0):
+        time.sleep(startup_delay)
+        thread_conn = get_db_connection()
+        if not thread_conn:
+            log.error(f'  {engine}: could not connect to DB')
+            return
+        try:
+            status(f'Opening {engine}...')
+            engine_results = scrape_engine(search_term, engine, pages, log, status_callback=status_callback)
+            for page_no, filepath, urls in engine_results:
+                if not urls:
+                    log.info(f'  {engine} p{page_no}: 0 URLs extracted')
+                else:
+                    inserted = insert_raw_urls(thread_conn, search_term_id, engine, page_no, urls)
+                    with map_lock:
+                        for url, raw_id in inserted:
+                            if url not in raw_url_id_map:
+                                raw_url_id_map[url] = []
+                            raw_url_id_map[url].append((raw_id, engine))
+                            all_raw_urls.append(url)
+                    log.info(f'  {engine} p{page_no}: {len(urls)} URLs')
+                    status(f'Found {len(urls)} URLs from {engine} page {page_no}')
+        finally:
+            thread_conn.close()
 
-        engine_results = scrape_engine(search_term, engine, pages, log, status_callback=status_callback)
-
-        for page_no, filepath, urls in engine_results:
-            if not urls:
-                log.info(f'  {engine} p{page_no}: 0 URLs extracted')
-            else:
-                inserted = insert_raw_urls(conn, search_term_id, engine, page_no, urls)
-                for url, raw_id in inserted:
-                    if url not in raw_url_id_map:
-                        raw_url_id_map[url] = []
-                    raw_url_id_map[url].append((raw_id, engine))
-                    all_raw_urls.append(url)
-                log.info(f'  {engine} p{page_no}: {len(urls)} URLs | total so far: {len(all_raw_urls)}')
-                status(f'Found {len(urls)} URLs from {engine} page {page_no}')
+    status(f'Launching {total_engines} engines in parallel...')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=total_engines) as executor:
+        futures = {
+            executor.submit(scrape_and_store, engine): engine
+            for engine in active_engines
+        }
+        for future in concurrent.futures.as_completed(futures):
+            engine = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                log.error(f'  {engine} failed: {e}')
 
     log.info(f'All engines done. Total raw URLs: {len(all_raw_urls)}')
     status(f'All engines scraped. {len(all_raw_urls)} total raw URLs collected.')

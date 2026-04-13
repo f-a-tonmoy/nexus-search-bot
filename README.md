@@ -1,7 +1,78 @@
-# NEXUS - Multi-Engine Web Search Intelligence Bot
-**DSE I2400 - Project 1 | CUNY MS Data Science, City College of New York**
+# NEXUS — Multi-Engine Web Search Intelligence Bot
 
-NEXUS is a full-stack data ingestion engine that scrapes multiple search engines, deduplicates and validates URLs, counts keyword frequency across result pages, and ranks them through a Streamlit GUI.
+NEXUS is a web search aggregation and relevance ranking engine. It scrapes Google, Bing, Yahoo, and DuckDuckGo simultaneously, validates and deduplicates the results, scores each URL by keyword relevance using phrase-weighted frequency analysis, and surfaces the most relevant results through a Streamlit GUI.
+
+---
+
+## How It Works
+
+NEXUS runs a three-stage ETL pipeline:
+
+**1. Extract - Web Scraping**
+Four search engines are scraped in parallel using `undetected_chromedriver` with Brave Browser. Each engine gets its own isolated browser session and DB connection. URLs are extracted via DOM selectors, unwrapped from redirect wrappers, and filtered for noise (ads, social media, search engine internals).
+
+**2. Transform - Validation and Deduplication**
+Raw URLs go through concurrent HEAD/GET validation to confirm reachability. Redirects are followed to their canonical form (`response.url`), and tracking parameters (`utm_*`, `msclkid`, `gclid`) are stripped before storage. This ensures URLs from different engines that redirect to the same page are correctly deduplicated.
+
+Multi-engine attribution is tracked via a dedicated `clean_url_engines` table -- if Google and DuckDuckGo both return the same URL, it's stored once in `clean_urls` but attributed to both engines. This powers the engine count signal used in ranking.
+
+**3. Load + Score - Frequency Analysis**
+Each validated URL is fetched and its visible text extracted using BeautifulSoup (scripts, styles, nav, footer stripped). A phrase-weighted scoring model counts both individual keyword matches and multi-word phrase matches:
+
+- Individual keywords: 1x weight
+- Bigrams (e.g. `childhood cancer`): 3x weight
+- Trigrams (e.g. `childhood cancer treatment`): 3x weight
+
+This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently. Scores and engine counts are written to `url_frequency` and results are ranked by `term_occurrences DESC, engine_count DESC`.
+
+---
+
+## Architecture
+
+```
+User Input (Search Term)
+        │
+        ▼
+┌───────────────────────────────────────┐
+│         Parallel Scraping             │
+│  Google  Bing  Yahoo  DuckDuckGo      │
+│  (each in isolated browser + thread)  │
+└───────────────┬───────────────────────┘
+                │ raw URLs
+                ▼
+┌───────────────────────────────────────┐
+│       URL Validation Pipeline         │
+│  - Concurrent HEAD/GET requests       │
+│  - Redirect following (canonical URL) │
+│  - Tracking param stripping           │
+│  - Deduplication via unique constraint│
+└───────────────┬───────────────────────┘
+                │ clean URLs + engine attribution
+                ▼
+┌───────────────────────────────────────┐
+│     MySQL Database (my_custom_bot)    │
+│  search_terms  raw_urls  clean_urls   │
+│  clean_url_engines  url_frequency     │
+│  search_history                       │
+└───────────────┬───────────────────────┘
+                │
+                ▼
+┌───────────────────────────────────────┐
+│    Keyword Frequency Analyzer         │
+│  - BeautifulSoup text extraction      │
+│  - Phrase-weighted scoring model      │
+│  - Concurrent (10 threads)            │
+└───────────────┬───────────────────────┘
+                │ ranked results
+                ▼
+┌───────────────────────────────────────┐
+│         NEXUS Streamlit GUI           │
+│  - Live pipeline status log           │
+│  - Engine filter + page selector      │
+│  - Recent search history              │
+│  - Results ranked by relevance        │
+└───────────────────────────────────────┘
+```
 
 ---
 
@@ -10,8 +81,8 @@ NEXUS is a full-stack data ingestion engine that scrapes multiple search engines
 ```
 nexus-search-bot/
 ├── app.py                      # Streamlit GUI (NEXUS)
-├── web_search_scraper.py       # Multi-engine scraping pipeline
-├── term_frequency_analyzer.py  # Keyword frequency counter
+├── web_search_scraper.py       # Parallel multi-engine scraping pipeline
+├── term_frequency_analyzer.py  # Phrase-weighted keyword frequency scorer
 ├── database_operations.py      # All MySQL DB operations
 ├── clear_database.py           # Utility to wipe all tables
 ├── requirements.txt
@@ -26,6 +97,19 @@ nexus-search-bot/
 ├── screenshots/                # Auto-generated screenshots (gitignored)
 └── chrome_profile/             # Browser profile (gitignored)
 ```
+
+---
+
+## Database Schema
+
+| Table | Description |
+|---|---|
+| `search_terms` | Stores unique search queries |
+| `raw_urls` | All URLs scraped per engine per page |
+| `clean_urls` | Validated, deduplicated canonical URLs |
+| `clean_url_engines` | Tracks which engines returned each clean URL |
+| `url_frequency` | Phrase-weighted keyword frequency score per URL |
+| `search_history` | Log of every pipeline run with timestamp |
 
 ---
 
@@ -45,7 +129,6 @@ pip install -r requirements.txt
 ```
 
 ### 2. Create the database
-In MySQL, create the database:
 ```sql
 CREATE DATABASE my_custom_bot;
 ```
@@ -63,6 +146,9 @@ password='00000'
 database='my_custom_bot'
 ```
 
+### 4. Configure browser path
+In `web_search_scraper.py`, update `BRAVE_PATH` to point to your Chromium-based browser executable.
+
 ---
 
 ## Running the App
@@ -73,89 +159,32 @@ streamlit run app.py
 
 ---
 
-## Running the Pipeline (CLI)
+## CLI Usage
 
-To scrape and analyze a search term directly:
+Scrape and analyze a search term directly:
 ```bash
 python web_search_scraper.py
 ```
-Picks a random term from the 5 predefined search terms and runs the full pipeline.
 
-To run frequency analysis only:
+Run frequency analysis only on existing DB data:
 ```bash
 python term_frequency_analyzer.py
 ```
-Prompts you to select a term from the DB and optionally rerun.
 
-To clear all data:
+Clear all data:
 ```bash
 python clear_database.py
 ```
 
 ---
 
-## Database Schema
-
-| Table | Description |
-|---|---|
-| `search_terms` | Stores unique search queries |
-| `raw_urls` | All URLs scraped per engine per page |
-| `clean_urls` | Validated, deduplicated canonical URLs |
-| `clean_url_engines` | Tracks which engines returned each clean URL |
-| `url_frequency` | Keyword frequency score per URL per search term |
-| `search_history` | Log of every pipeline run with timestamp |
-
----
-
-## Search Terms
-
-```
-1. childhood cancer morbidity rate ethnicity or race
-2. childhood cancer early diagnosis methods
-3. childhood cancer immunotherapy success rate
-4. childhood cancer treatment best hospitals usa
-5. childhood cancer treatment best hospitals europe asia latin countries
-```
-
----
-
-## Pipeline Overview
-
-```
-Search Term Input
-      │
-      ▼
-Web Scraping (Google, Bing, Yahoo, DuckDuckGo)
-      │  undetected_chromedriver + Brave Browser
-      │  DOM extraction, ad filtering, screenshot capture
-      ▼
-URL Validation
-      │  Concurrent HEAD/GET requests
-      │  Redirect following → canonical URL
-      │  Tracking param stripping (utm_*, msclkid, gclid)
-      ▼
-Database Storage
-      │  raw_urls → clean_urls → clean_url_engines
-      ▼
-Keyword Frequency Analysis
-      │  BeautifulSoup page text extraction
-      │  Concurrent processing (10 threads)
-      ▼
-Ranked Results (GUI)
-      │  ORDER BY term_occurrences DESC, engine_count DESC
-      ▼
-NEXUS Streamlit GUI
-```
-
----
-
 ## Key Design Decisions
 
-- **One browser per engine** - driver stays open across all pages per engine, reducing Chrome startup overhead
-- **Canonical URL via redirect** - `response.url` after following redirects used as canonical form, ensuring cross-engine deduplication works correctly
-- **`clean_url_engines` table** - tracks multi-engine attribution per URL accurately via FK, enabling reliable `source_engine_count`
-- **Tracking param stripping** - `utm_*`, `msclkid`, `gclid` removed before validation to prevent duplicate URLs from ad tracking
-- **`raw_url_id_map` as list** - stores all `(raw_id, engine)` pairs per URL to capture multi-engine provenance before deduplication
+- **Parallel scraping** - all engines run simultaneously in separate threads, each with its own browser session and DB connection, protected by a global driver init lock to avoid chromedriver binary conflicts on Windows
+- **Canonical URL via redirect** - `response.url` after following redirects is used as the canonical form, ensuring www vs non-www variants of the same page deduplicate correctly
+- **`clean_url_engines` table** - decouples engine attribution from URL storage, enabling accurate multi-engine count even when different engines return slightly different URL variants that resolve to the same canonical URL
+- **Phrase-weighted scoring** - bigrams and trigrams are counted at 3x the weight of individual keywords, rewarding contextually relevant pages over keyword-stuffed ones
+- **Tracking param stripping** - `utm_*`, `msclkid`, `gclid` and other ad tracking parameters are removed before validation, preventing the same page from appearing multiple times with different tracking IDs
 
 ---
 
@@ -166,6 +195,6 @@ NEXUS Streamlit GUI
 | `streamlit` | GUI framework |
 | `mysql-connector-python` | MySQL connection |
 | `undetected-chromedriver` | Anti-bot browser automation |
-| `selenium` | DOM interaction |
-| `requests` | URL validation |
-| `beautifulsoup4` | Page text extraction |
+| `selenium` | DOM interaction and URL extraction |
+| `requests` | Concurrent URL validation |
+| `beautifulsoup4` | Page text extraction for frequency analysis |

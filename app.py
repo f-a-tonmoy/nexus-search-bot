@@ -43,6 +43,15 @@ st.markdown('''
         --nexus-accent-border: #b0bcee;
     }
 
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --nexus-accent:        #7b8ff5;
+            --nexus-accent-hover:  #9aaaf8;
+            --nexus-accent-light:  rgba(123, 143, 245, 0.12);
+            --nexus-accent-border: #4a5bbf;
+        }
+    }
+
     /* Dark mode -- Streamlit sets this class on the root stApp element */
     .stApp.st-emotion-cache-dark,
     [data-testid="stAppViewContainer"].dark {
@@ -86,10 +95,13 @@ st.markdown('''
         .stSelectbox label, .stMultiSelect label { color: var(--text-color) !important; opacity: 0.6; }
     }
 
-    /* Search button -- override Streamlit primary color */
-    div[data-testid="stButton"] button[kind="primary"] {
-        background-color: var(--nexus-accent) !important;
-        border-color: var(--nexus-accent) !important;
+    /* Search button -- force deep indigo */
+    div[data-testid="stButton"] button[kind="primary"],
+    div[data-testid="stButton"] button[kind="primary"]:active,
+    div[data-testid="stButton"] button[kind="primary"]:focus,
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #2d3a8c !important;
+        border-color: #2d3a8c !important;
         color: #ffffff !important;
         font-family: 'Space Mono', monospace;
         font-size: 0.9rem;
@@ -98,8 +110,8 @@ st.markdown('''
     }
 
     div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: var(--nexus-accent-hover) !important;
-        border-color: var(--nexus-accent-hover) !important;
+        background-color: #1e2a6e !important;
+        border-color: #1e2a6e !important;
     }
 
     div[data-testid="stButton"] button {
@@ -107,7 +119,7 @@ st.markdown('''
         font-size: 0.8rem;
     }
 
-    /* Result cards -- use transparent bg so theme handles it */
+    /* Result cards -- transparent bg, theme handles it */
     .result-card {
         background: transparent;
         border: 1px solid var(--nexus-accent-border);
@@ -119,7 +131,13 @@ st.markdown('''
     }
 
     .result-card:hover {
-        background: var(--nexus-accent-light);
+        background: rgba(45, 58, 140, 0.06);
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .result-card:hover {
+            background: rgba(123, 143, 245, 0.1);
+        }
     }
 
     .result-rank {
@@ -228,7 +246,7 @@ st.markdown('''
 <script>
 function applyNexusTheme() {
     const bg = getComputedStyle(document.body).backgroundColor;
-    const rgb = bg.match(/\d+/g);
+    const rgb = bg.match(/[0-9]+/g);
     const isDark = rgb && (parseInt(rgb[0]) + parseInt(rgb[1]) + parseInt(rgb[2])) < 150;
     const root = document.documentElement;
     if (isDark) {
@@ -410,10 +428,6 @@ search_btn = st.button('⬡  Search', use_container_width=True, type='primary')
 # Search logic
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Search logic
-# ---------------------------------------------------------------------------
-
 def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None):
     """Run scraper + frequency in a background thread, posting to status_queue."""
     def post(msg):
@@ -502,7 +516,7 @@ def do_search(term, engines, pages, force_rerun=False):
             elapsed = time.time() - start_time
             mins, secs = divmod(int(elapsed), 60)
             duration = f'{mins}m {secs}s' if mins else f'{secs}s'
-            s.update(label=f'✓ Analysis complete — {duration}', state='complete', expanded=True)
+            s.update(label=f'Analysis complete — {duration}', state='complete', expanded=True)
 
         st.session_state['search_term_id'] = term_id
         st.session_state['results'] = load_results(term_id, engines)
@@ -535,19 +549,33 @@ def do_search(term, engines, pages, force_rerun=False):
                     elapsed = time.time() - start_time
                     mins, secs = divmod(int(elapsed), 60)
                     duration = f'{mins}m {secs}s' if mins else f'{secs}s'
-                    s.update(label=f'✓ Pipeline complete — {duration}', state='complete', expanded=True)
-                    break
-                else:
-                    messages.append(item)
+                    messages.append(f'✔  Pipeline complete — {duration}')
                     log_placeholder.markdown(
                         '<div style="max-height:320px;overflow-y:auto;padding-right:4px;">' +
                         ''.join(
-                            f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:var(--text-color);font-weight:600;padding:2px 0;line-height:1.4;">› {m}</div>'
-                            for m in messages
+                            f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:{"#16a34a" if i == len(messages)-1 else "var(--text-color)"};font-weight:{"800" if i == len(messages)-1 else "600"};padding:2px 0;line-height:1.4;">› {m}</div>'
+                            for i, m in enumerate(messages)
                         ) +
                         '</div>',
                         unsafe_allow_html=True
                     )
+                    s.update(label=f'Pipeline complete — {duration}', state='complete', expanded=True)
+                    break
+                else:
+                    # Typing animation -- reveal message character by character
+                    messages.append('')
+                    for char in item:
+                        messages[-1] += char
+                        log_placeholder.markdown(
+                            '<div style="max-height:320px;overflow-y:auto;padding-right:4px;">' +
+                            ''.join(
+                                f'<div style="font-family:Space Mono,monospace;font-size:0.82rem;color:var(--text-color);font-weight:600;padding:2px 0;line-height:1.4;">› {m}{"▌" if i == len(messages)-1 else ""}</div>'
+                                for i, m in enumerate(messages)
+                            ) +
+                            '</div>',
+                            unsafe_allow_html=True
+                        )
+                        time.sleep(0.018)
             except Exception:
                 if not thread.is_alive():
                     break
@@ -578,7 +606,7 @@ results = st.session_state.get('results', [])
 # Show notice when displaying cached results
 if st.session_state.get('showed_existing') and results:
     st.markdown('''
-    <div style="background:var(--nexus-accent-light); border:1px solid var(--nexus-accent-border);
+    <div style="background:rgba(45,58,140,0.08); border:1px solid var(--nexus-accent-border);
                 border-radius:8px; padding:10px 16px; margin-bottom:12px;">
         <span style="color:var(--nexus-accent); font-size:0.9rem; font-weight:600;">
             Showing cached results from database.
@@ -591,7 +619,7 @@ if results:
 
     total = len(results)
     term_display = st.session_state.get('last_search', '')
-    st.markdown(f'**{total} results** for *"{term_display}"* — ranked by keyword frequency then engine count')
+    st.markdown(f'<div style="font-size:1.1rem;font-weight:700;margin-bottom:16px;"><b>{total} results</b> for <i>"{term_display}"</i></div>', unsafe_allow_html=True)
 
     st.markdown('<br>', unsafe_allow_html=True)
 
