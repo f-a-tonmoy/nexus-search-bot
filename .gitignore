@@ -16,6 +16,7 @@ __pycache__/
 .env
 venv/
 env/
+.vscode
 
 # Streamlit cache
 .streamlit/secrets.toml
