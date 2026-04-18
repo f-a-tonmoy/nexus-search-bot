@@ -614,6 +614,5 @@ SEARCH_TERMS = [
 ]
 
 if __name__ == '__main__':
-    search_term = random.choice(SEARCH_TERMS).strip().lower()
-    print(f'Selected search term: "{search_term}"')
-    term_id, urls = run_pipeline(search_term, pages=3)
+    for search_term in SEARCH_TERMS:
+        _ = run_pipeline(search_term, pages=3)

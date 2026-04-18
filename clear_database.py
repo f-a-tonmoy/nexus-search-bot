@@ -21,6 +21,7 @@ def clear_database():
             'clean_url_engines',
             'clean_urls',
             'raw_urls',
+            'search_history',
             'search_terms',
         ]
 
