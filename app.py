@@ -1,15 +1,12 @@
 import time
+import queue
 import threading
 import streamlit as st
 import logging
 import streamlit.components.v1 as components
 
-logging.getLogger('streamlit').addFilter(
-    type('_F', (logging.Filter,), {
-        'filter': lambda self, r: 'st.components.v1.html' not in r.getMessage()
-    })()
-)
-
+from term_frequency_analyzer import run_frequency
+from web_search_scraper import run_pipeline, SEARCH_ENGINES
 from database_operations import (
     get_db_connection,
     get_all_search_terms,
@@ -18,8 +15,13 @@ from database_operations import (
     get_search_term_id,
     has_frequency_data,
 )
-from web_search_scraper import run_pipeline, SEARCH_ENGINES
-from term_frequency_analyzer import run_frequency
+
+logging.getLogger('streamlit').addFilter(
+    type('_F', (logging.Filter,), {
+        'filter': lambda self, r: 'st.components.v1.html' not in r.getMessage()
+    })()
+)
+
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -308,7 +310,8 @@ def load_results(search_term_id, engines):
     conn = get_db_connection()
     if not conn:
         return []
-    results = get_results_for_term(conn, search_term_id, engines if engines != ALL_ENGINES else None)
+    results = get_results_for_term(
+        conn, search_term_id, engines if engines != ALL_ENGINES else None)
     conn.close()
     return results
 
@@ -343,12 +346,15 @@ for key, default in {
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown('<div class="main-title">⬡ NEXUS</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Search deeper, rank smarter</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">⬡ NEXUS</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Search deeper, rank smarter</div>',
+                unsafe_allow_html=True)
 
     st.markdown('---')
 
-    st.markdown('<div class="section-label">Search Engines</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Search Engines</div>',
+                unsafe_allow_html=True)
     selected_engines = st.multiselect(
         'Engines',
         options=ALL_ENGINES,
@@ -356,16 +362,20 @@ with st.sidebar:
         label_visibility='collapsed',
     )
 
-    st.markdown('<div class="section-label">Pages per Engine</div>', unsafe_allow_html=True)
-    pages = st.number_input('Pages', min_value=1, max_value=5, value=1, step=1, label_visibility='collapsed')
+    st.markdown('<div class="section-label">Pages per Engine</div>',
+                unsafe_allow_html=True)
+    pages = st.number_input('Pages', min_value=1, max_value=5,
+                            value=1, step=1, label_visibility='collapsed')
 
     st.markdown('---')
-    st.markdown('<div class="section-label">Recent Searches</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Recent Searches</div>',
+                unsafe_allow_html=True)
 
     recent = load_recent_searches(limit=3)
     if recent:
         for r in recent:
-            ts = r['searched_at'].strftime('%H:%M') if hasattr(r['searched_at'], 'strftime') else ''
+            ts = r['searched_at'].strftime('%H:%M') if hasattr(
+                r['searched_at'], 'strftime') else ''
             st.markdown(f'''
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
                 <span style="font-family:\'Space Mono\',monospace; font-size:0.82rem;
@@ -383,8 +393,10 @@ with st.sidebar:
         st.caption('No recent searches yet.')
 
     st.markdown('---')
-    st.markdown('<div class="danger-label">⚠ Danger Zone</div>', unsafe_allow_html=True)
-    st.caption('Clears all existing data for the current search term and reruns the full pipeline from scratch.')
+    st.markdown('<div class="danger-label">⚠ Danger Zone</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        'Clears all existing data for the current search term and reruns the full pipeline from scratch.')
     st.markdown('''
     <style>
     .danger-btn button {
@@ -400,7 +412,8 @@ with st.sidebar:
     </style>
     <div class="danger-btn">
     ''', unsafe_allow_html=True)
-    rerun_btn = st.button('↺  Rerun from scratch', use_container_width=True, key='rerun_scratch')
+    rerun_btn = st.button('↺  Rerun from scratch',
+                          use_container_width=True, key='rerun_scratch')
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
@@ -408,7 +421,8 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 st.markdown('<div class="main-title">NEXUS</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">One query, all engines — results ranked by relevance</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">One query, all engines — results ranked by relevance</div>',
+            unsafe_allow_html=True)
 
 # Search input with autocomplete
 existing_terms = load_search_terms()
@@ -421,7 +435,8 @@ search_input = st.text_input(
 
 # Autofill suggestions
 if search_input and len(search_input) >= 3 and existing_terms:
-    matches = [t for t in existing_terms if search_input.lower() in t.lower() and t.lower() != search_input.lower()]
+    matches = [t for t in existing_terms if search_input.lower(
+    ) in t.lower() and t.lower() != search_input.lower()]
     if matches:
         st.caption('Suggestions from database:')
         cols = st.columns(min(len(matches), 3))
@@ -436,6 +451,7 @@ search_btn = st.button('⬡  Search', use_container_width=True, type='primary')
 # ---------------------------------------------------------------------------
 # Search logic
 # ---------------------------------------------------------------------------
+
 
 def render_log(placeholder, messages, animate_last=False):
     if not messages:
@@ -537,7 +553,8 @@ def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None
     conn = get_db_connection()
     if conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM clean_urls WHERE search_term_id = %s', (term_id,))
+        cursor.execute(
+            'SELECT COUNT(*) FROM clean_urls WHERE search_term_id = %s', (term_id,))
         total_in_db = cursor.fetchone()[0]
         cursor.close()
         conn.close()
@@ -564,9 +581,6 @@ def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None
 
 
 def do_search(term, engines, pages, force_rerun=False):
-    import queue
-    import threading
-
     term = term.strip().lower()
     if not term:
         st.warning('Please enter a search term.')
@@ -619,7 +633,8 @@ def do_search(term, engines, pages, force_rerun=False):
             elapsed = time.time() - start_time
             mins, secs = divmod(int(elapsed), 60)
             duration = f'{mins}m {secs}s' if mins else f'{secs}s'
-            s.update(label=f'Analysis complete — {duration}', state='complete', expanded=True)
+            s.update(
+                label=f'Analysis complete — {duration}', state='complete', expanded=True)
 
         st.session_state['search_term_id'] = term_id
         st.session_state['results'] = load_results(term_id, engines)
@@ -645,16 +660,19 @@ def do_search(term, engines, pages, force_rerun=False):
             try:
                 item = q.get(timeout=0.5)
                 if item is None:
-                    s.update(label='✗ Pipeline failed — check logs', state='error', expanded=True)
+                    s.update(label='✗ Pipeline failed — check logs',
+                             state='error', expanded=True)
                     break
                 elif isinstance(item, tuple) and item[0] == 'DONE':
                     final_term_id = item[1]
                     elapsed = time.time() - start_time
                     mins, secs = divmod(int(elapsed), 60)
                     duration = f'{mins}m {secs}s' if mins else f'{secs}s'
-                    messages.append((f'Data ingestion complete — {duration}', '#16a34a'))
+                    messages.append(
+                        (f'Data ingestion complete — {duration}', '#16a34a'))
                     render_log(log_placeholder, messages)
-                    s.update(label=f'Data ingestion complete — {duration}', state='complete', expanded=True)
+                    s.update(
+                        label=f'Data ingestion complete — {duration}', state='complete', expanded=True)
                     break
                 else:
                     # Handle plain string or (msg, color) tuple
@@ -715,7 +733,8 @@ if results:
 
     total = len(results)
     term_display = st.session_state.get('last_search', '')
-    st.markdown(f'<div style="font-size:1.1rem;font-weight:700;margin-bottom:16px;"><b>{total} results</b> for <i>"{term_display}"</i></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:1.1rem;font-weight:700;margin-bottom:16px;"><b>{total} results</b> for <i>"{term_display}"</i></div>', unsafe_allow_html=True)
 
     st.markdown('<br>', unsafe_allow_html=True)
 

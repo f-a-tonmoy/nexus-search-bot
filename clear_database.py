@@ -7,7 +7,8 @@ def clear_database():
         print('Could not connect to database.')
         return
 
-    confirm = input('This will delete ALL data. Type "yes" to confirm: ').strip().lower()
+    confirm = input(
+        'This will delete ALL data. Type "yes" to confirm: ').strip().lower()
     if confirm != 'yes':
         print('Aborted.')
         conn.close()

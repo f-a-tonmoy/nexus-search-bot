@@ -1,5 +1,6 @@
 import mysql.connector
 from mysql.connector import Error
+from urllib.parse import urlparse, urlencode, parse_qs
 
 
 def get_db_connection():
@@ -68,7 +69,6 @@ TRACKING_PARAMS = {
 
 
 def _normalize_url(url):
-    from urllib.parse import urlparse, urlencode, parse_qs
     try:
         parsed = urlparse(url)
         path = parsed.path.rstrip('/')
@@ -76,7 +76,8 @@ def _normalize_url(url):
         # Strip tracking query params, keep the rest
         if parsed.query:
             params = parse_qs(parsed.query, keep_blank_values=True)
-            clean_params = {k: v for k, v in params.items() if k.lower() not in TRACKING_PARAMS}
+            clean_params = {k: v for k, v in params.items(
+            ) if k.lower() not in TRACKING_PARAMS}
             query = urlencode(clean_params, doseq=True) if clean_params else ''
         else:
             query = ''
@@ -95,7 +96,8 @@ def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
     """
     cursor = connection.cursor()
     inserted_ids = []
-    normalized_map = {_normalize_url(raw_url): entries for raw_url, entries in raw_url_id_map.items()}
+    normalized_map = {_normalize_url(
+        raw_url): entries for raw_url, entries in raw_url_id_map.items()}
 
     try:
         for url in clean_urls:
@@ -167,7 +169,8 @@ def insert_url_frequency(connection, search_term_id, clean_url_id, term_occurren
         return cursor.lastrowid
     except Error as e:
         connection.rollback()
-        print(f'Failed to insert frequency for clean_url_id={clean_url_id}: {e}')
+        print(
+            f'Failed to insert frequency for clean_url_id={clean_url_id}: {e}')
         return None
     finally:
         cursor.close()
@@ -252,7 +255,8 @@ def get_results_for_term(connection, search_term_id, engines=None):
                 GROUP BY cu.id, cu.url, uf.term_occurrences
                 ORDER BY term_occurrences DESC, engine_count DESC
             '''
-            params = [search_term_id, search_term_id] + engines + [search_term_id]
+            params = [search_term_id, search_term_id] + \
+                engines + [search_term_id]
         else:
             query = '''
                 SELECT cu.id, cu.url,

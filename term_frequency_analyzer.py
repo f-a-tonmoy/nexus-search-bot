@@ -5,8 +5,10 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 import requests
-from bs4 import BeautifulSoup
 import concurrent.futures
+from bs4 import BeautifulSoup
+
+import math
 
 from database_operations import (
     get_db_connection,
@@ -129,7 +131,6 @@ def count_keywords(text, keywords, phrases):
     This prevents long pages (e.g. faculty profiles, CVs) from dominating
     purely due to higher word count.
     """
-    import math
 
     kw_score = sum(text.count(kw) for kw in keywords)
 

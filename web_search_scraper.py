@@ -12,6 +12,10 @@ from selenium.webdriver.common.by import By
 
 import requests
 import concurrent.futures
+from urllib.parse import urlparse, urlencode, parse_qs
+
+import tempfile
+import base64
 
 from database_operations import (
     get_db_connection,
@@ -80,7 +84,8 @@ def setup_logger():
 
     fh = logging.FileHandler(log_path, encoding='utf-8')
     fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
+    fh.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
 
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
@@ -112,7 +117,6 @@ def driver_setup():
     options.add_argument('--window-size=1920,1080')
 
     # Use a unique profile per driver instance to avoid profile lock conflicts
-    import tempfile
     profile_path = tempfile.mkdtemp(prefix='chrome_profile_')
     options.add_argument(f'--user-data-dir={profile_path}')
 
@@ -149,7 +153,8 @@ def get_search_url(search_term, engine_name, page_no=1):
 def handle_duckduckgo_pagination(driver, page_no, log):
     log.debug(f'DDG: scrolling to load page {page_no}')
     for _ in range(page_no - 1):
-        driver.execute_script('window.scrollTo(0, document.body.scrollHeight);')
+        driver.execute_script(
+            'window.scrollTo(0, document.body.scrollHeight);')
         time.sleep(3)
         try:
             driver.execute_script(
@@ -165,7 +170,8 @@ def is_captcha_page(driver, engine_name=None, log=None):
     try:
         src = driver.page_source.lower()
         title = driver.title.lower()
-        signals = ['captcha', 'unusual traffic', 'not a robot', 'verify you are human', 'blocked']
+        signals = ['captcha', 'unusual traffic',
+                   'not a robot', 'verify you are human', 'blocked']
         for signal in signals:
             # Bing embeds "blocked" in JS/CSS on normal pages -- check title only
             if engine_name == 'Bing':
@@ -175,7 +181,8 @@ def is_captcha_page(driver, engine_name=None, log=None):
             if matched:
                 if log:
                     where = 'title' if signal in title else 'page source'
-                    log.debug(f'CAPTCHA signal matched: "{signal}" found in {where}')
+                    log.debug(
+                        f'CAPTCHA signal matched: "{signal}" found in {where}')
                 return True
         return False
     except Exception:
@@ -221,8 +228,9 @@ def unwrap_redirect(href, engine_name):
         match = re.search(r'[?&]u=a1(.*?)(?:&|$)', href)
         if match:
             try:
-                import base64
-                decoded = base64.b64decode(match.group(1) + '==').decode('utf-8', errors='ignore')
+
+                decoded = base64.b64decode(match.group(
+                    1) + '==').decode('utf-8', errors='ignore')
                 url_match = re.search(r'https?://[^\s"]+', decoded)
                 if url_match:
                     return url_match.group(0)
@@ -330,7 +338,8 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
             log.debug(f'Navigating to: {url}')
             driver.get(url)
 
-            wait = random.uniform(8, 12) if engine_name == 'Bing' else random.uniform(5, 8)
+            wait = random.uniform(
+                8, 12) if engine_name == 'Bing' else random.uniform(5, 8)
             log.debug(f'Waiting {wait:.1f}s for page to load')
             time.sleep(wait)
 
@@ -343,15 +352,18 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
 
             if is_captcha_page(driver, engine_name, log):
                 log.warning(f'CAPTCHA on {engine_name} p{page_no} -- skipping')
-                status(f'CAPTCHA detected on {engine_name} page {page_no} -- skipping')
+                status(
+                    f'CAPTCHA detected on {engine_name} page {page_no} -- skipping')
                 continue
 
             filepath = resize_and_screenshot(driver, engine_name, page_no, log)
             urls = extract_links_from_dom(driver, engine_name, log)
 
             if not urls:
-                log.warning(f'No URLs extracted from {engine_name} p{page_no} -- possible soft CAPTCHA or empty page')
-                status(f'No results from {engine_name} page {page_no} -- possible CAPTCHA or block')
+                log.warning(
+                    f'No URLs extracted from {engine_name} p{page_no} -- possible soft CAPTCHA or empty page')
+                status(
+                    f'No results from {engine_name} page {page_no} -- possible CAPTCHA or block')
                 results.append((page_no, filepath, []))
                 continue
 
@@ -384,13 +396,13 @@ TRACKING_PARAMS = {
 
 
 def strip_tracking_params(url):
-    from urllib.parse import urlparse, urlencode, parse_qs
     try:
         parsed = urlparse(url)
         if not parsed.query:
             return url
         params = parse_qs(parsed.query, keep_blank_values=True)
-        clean = {k: v for k, v in params.items() if k.lower() not in TRACKING_PARAMS}
+        clean = {k: v for k, v in params.items() if k.lower()
+                 not in TRACKING_PARAMS}
         query = urlencode(clean, doseq=True) if clean else ''
         result = f'{parsed.scheme}://{parsed.netloc}{parsed.path}'
         if query:
@@ -402,7 +414,8 @@ def strip_tracking_params(url):
 
 def process_single_url(url):
     url = strip_tracking_params(url)
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         parsed = urlparse(url)
         path = parsed.path.rstrip('/')
@@ -410,7 +423,8 @@ def process_single_url(url):
         if parsed.query:
             clean_url += f'?{parsed.query}'
 
-        response = requests.head(clean_url, headers=headers, timeout=5, allow_redirects=True)
+        response = requests.head(
+            clean_url, headers=headers, timeout=5, allow_redirects=True)
 
         if response.status_code < 404 or response.status_code == 405:
             # Use the final URL after redirects as the canonical form
@@ -419,7 +433,8 @@ def process_single_url(url):
 
         # Some sites (e.g. Newsweek) block HEAD -- retry with GET
         if response.status_code == 406:
-            response = requests.get(clean_url, headers=headers, timeout=5, allow_redirects=True, stream=True)
+            response = requests.get(
+                clean_url, headers=headers, timeout=5, allow_redirects=True, stream=True)
             response.close()
             if response.status_code < 404 or response.status_code == 405:
                 canonical = response.url.rstrip('/')
@@ -440,7 +455,8 @@ def validate_urls(raw_urls, log):
     rejected = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        futures = {executor.submit(process_single_url, url): url for url in raw_urls}
+        futures = {executor.submit(
+            process_single_url, url): url for url in raw_urls}
         for future in concurrent.futures.as_completed(futures):
             original_url = futures[future]
             result, reason = future.result()
@@ -523,12 +539,14 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
             return
         try:
             status(f'Opening {engine}...')
-            engine_results = scrape_engine(search_term, engine, pages, log, status_callback=status_callback)
+            engine_results = scrape_engine(
+                search_term, engine, pages, log, status_callback=status_callback)
             for page_no, filepath, urls in engine_results:
                 if not urls:
                     log.info(f'  {engine} p{page_no}: 0 URLs extracted')
                 else:
-                    inserted = insert_raw_urls(thread_conn, search_term_id, engine, page_no, urls)
+                    inserted = insert_raw_urls(
+                        thread_conn, search_term_id, engine, page_no, urls)
                     with map_lock:
                         for url, raw_id in inserted:
                             if url not in raw_url_id_map:
@@ -536,7 +554,8 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
                             raw_url_id_map[url].append((raw_id, engine))
                             all_raw_urls.append(url)
                     log.info(f'  {engine} p{page_no}: {len(urls)} URLs')
-                    status(f'Found {len(urls)} URLs from {engine} page {page_no}')
+                    status(
+                        f'Found {len(urls)} URLs from {engine} page {page_no}')
         finally:
             thread_conn.close()
 
@@ -557,7 +576,8 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
                 log.error(f'  {engine} failed: {e}')
 
     log.info(f'All engines done. Total raw URLs: {len(all_raw_urls)}')
-    status(f'All engines scraped. {len(all_raw_urls)} total raw URLs collected.')
+    status(
+        f'All engines scraped. {len(all_raw_urls)} total raw URLs collected.')
     status(f'Validating {len(all_raw_urls)} raw URLs for reachability...')
 
     clean_urls = validate_urls(all_raw_urls, log)
