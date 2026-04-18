@@ -1,7 +1,14 @@
 import time
 import threading
 import streamlit as st
+import logging
 import streamlit.components.v1 as components
+
+logging.getLogger('streamlit').addFilter(
+    type('_F', (logging.Filter,), {
+        'filter': lambda self, r: 'st.components.v1.html' not in r.getMessage()
+    })()
+)
 
 from database_operations import (
     get_db_connection,

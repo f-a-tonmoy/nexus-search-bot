@@ -33,7 +33,7 @@ CREATE TABLE `clean_url_engines` (
   KEY `search_term_id` (`search_term_id`),
   CONSTRAINT `clean_url_engines_ibfk_1` FOREIGN KEY (`clean_url_id`) REFERENCES `clean_urls` (`id`),
   CONSTRAINT `clean_url_engines_ibfk_2` FOREIGN KEY (`search_term_id`) REFERENCES `search_terms` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=958 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=363 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -54,7 +54,7 @@ CREATE TABLE `clean_urls` (
   KEY `raw_url_id` (`raw_url_id`),
   CONSTRAINT `clean_urls_ibfk_1` FOREIGN KEY (`raw_url_id`) REFERENCES `raw_urls` (`id`),
   CONSTRAINT `clean_urls_ibfk_2` FOREIGN KEY (`search_term_id`) REFERENCES `search_terms` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=731 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=305 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -74,7 +74,7 @@ CREATE TABLE `raw_urls` (
   PRIMARY KEY (`id`),
   KEY `search_term_id` (`search_term_id`),
   CONSTRAINT `raw_urls_ibfk_1` FOREIGN KEY (`search_term_id`) REFERENCES `search_terms` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=1511 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=502 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -86,10 +86,12 @@ DROP TABLE IF EXISTS `search_history`;
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `search_history` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `search_term` varchar(512) NOT NULL,
   `searched_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  `search_term_id` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `search_term_id` (`search_term_id`),
+  CONSTRAINT `search_history_ibfk_1` FOREIGN KEY (`search_term_id`) REFERENCES `search_terms` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=71 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -104,7 +106,7 @@ CREATE TABLE `search_terms` (
   `term` varchar(512) NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -119,14 +121,13 @@ CREATE TABLE `url_frequency` (
   `clean_url_id` bigint NOT NULL,
   `search_term_id` int NOT NULL,
   `term_occurrences` int NOT NULL DEFAULT '0',
-  `source_engine_count` int NOT NULL DEFAULT '0',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_freq` (`clean_url_id`,`search_term_id`),
   KEY `search_term_id` (`search_term_id`),
   CONSTRAINT `url_frequency_ibfk_1` FOREIGN KEY (`clean_url_id`) REFERENCES `clean_urls` (`id`),
   CONSTRAINT `url_frequency_ibfk_2` FOREIGN KEY (`search_term_id`) REFERENCES `search_terms` (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=816 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=264 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -142,4 +143,4 @@ CREATE TABLE `url_frequency` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-04-12 16:36:45
+-- Dump completed on 2026-04-17 21:21:47

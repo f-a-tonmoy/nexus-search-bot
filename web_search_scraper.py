@@ -349,6 +349,12 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
             filepath = resize_and_screenshot(driver, engine_name, page_no, log)
             urls = extract_links_from_dom(driver, engine_name, log)
 
+            if not urls:
+                log.warning(f'No URLs extracted from {engine_name} p{page_no} -- possible soft CAPTCHA or empty page')
+                status(f'No results from {engine_name} page {page_no} -- possible CAPTCHA or block')
+                results.append((page_no, filepath, []))
+                continue
+
             results.append((page_no, filepath, urls))
 
             if page_no < pages:
@@ -560,7 +566,7 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
     log.debug(f'Inserting {len(clean_urls)} clean URLs into DB...')
     insert_clean_urls(conn, search_term_id, raw_url_id_map, clean_urls)
 
-    insert_search_history(conn, search_term)
+    insert_search_history(conn, search_term_id)
 
     conn.close()
     log.debug('DB connection closed')

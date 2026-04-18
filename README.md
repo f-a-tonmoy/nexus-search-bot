@@ -66,6 +66,7 @@ User Input (Search Term)
 │    Keyword Frequency Analyzer         │
 │  - BeautifulSoup text extraction      │
 │  - Phrase-weighted scoring model      │
+│  - Log-normalized scores              │
 │  - Concurrent (10 threads)            │
 └───────────────┬───────────────────────┘
                 │ ranked results
@@ -114,7 +115,7 @@ nexus-search-bot/
 | `clean_urls` | Validated, deduplicated canonical URLs |
 | `clean_url_engines` | Tracks which engines returned each clean URL |
 | `url_frequency` | Phrase-weighted keyword frequency score per URL |
-| `search_history` | Log of every pipeline run with timestamp |
+| `search_history` | Log of every pipeline run with timestamp, linked to search term via FK |
 
 ---
 
@@ -189,6 +190,8 @@ python clear_database.py
 - **Canonical URL via redirect** - `response.url` after following redirects is used as the canonical form, ensuring www vs non-www variants of the same page deduplicate correctly
 - **`clean_url_engines` table** - decouples engine attribution from URL storage, enabling accurate multi-engine count even when different engines return slightly different URL variants that resolve to the same canonical URL
 - **Phrase-weighted scoring** - weights scale linearly with phrase length: 1x for individual keywords, 2x for bigrams, 3x for trigrams. This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently
+- **Log normalization** - raw scores are divided by `log(page_word_count + 1)` to prevent long pages from dominating purely due to word count, while avoiding the over-penalization of raw length division
+- **Soft CAPTCHA detection** - beyond keyword-based CAPTCHA signals in page title and source, zero URL extraction is also treated as a probable block and logged as a warning
 - **Tracking param stripping** - `utm_*`, `msclkid`, `gclid` and other ad tracking parameters are removed before validation, preventing the same page from appearing multiple times with different tracking IDs
 
 ---

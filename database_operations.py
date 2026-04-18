@@ -152,17 +152,16 @@ def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
         cursor.close()
 
 
-def insert_url_frequency(connection, search_term_id, clean_url_id, term_occurrences, source_engine_count):
+def insert_url_frequency(connection, search_term_id, clean_url_id, term_occurrences):
     cursor = connection.cursor()
     try:
         cursor.execute(
             '''INSERT INTO url_frequency
-                   (clean_url_id, search_term_id, term_occurrences, source_engine_count)
-               VALUES (%s, %s, %s, %s)
+                   (clean_url_id, search_term_id, term_occurrences)
+               VALUES (%s, %s, %s)
                ON DUPLICATE KEY UPDATE
-                   term_occurrences = VALUES(term_occurrences),
-                   source_engine_count = VALUES(source_engine_count)''',
-            (clean_url_id, search_term_id, term_occurrences, source_engine_count)
+                   term_occurrences = VALUES(term_occurrences)''',
+            (clean_url_id, search_term_id, term_occurrences)
         )
         connection.commit()
         return cursor.lastrowid
@@ -174,13 +173,13 @@ def insert_url_frequency(connection, search_term_id, clean_url_id, term_occurren
         cursor.close()
 
 
-def insert_search_history(connection, search_term):
+def insert_search_history(connection, search_term_id):
     """Record every pipeline run in search_history."""
     cursor = connection.cursor()
     try:
         cursor.execute(
-            'INSERT INTO search_history (search_term) VALUES (%s)',
-            (search_term,)
+            'INSERT INTO search_history (search_term_id) VALUES (%s)',
+            (search_term_id,)
         )
         connection.commit()
     except Error as e:
@@ -191,13 +190,14 @@ def insert_search_history(connection, search_term):
 
 
 def get_recent_searches(connection, limit=3):
-    """Return the most recent distinct search terms."""
+    """Return the most recent distinct search terms via join with search_terms."""
     cursor = connection.cursor(dictionary=True)
     try:
         cursor.execute(
-            '''SELECT search_term, MAX(searched_at) AS searched_at
-               FROM search_history
-               GROUP BY search_term
+            '''SELECT st.term AS search_term, MAX(sh.searched_at) AS searched_at
+               FROM search_history sh
+               JOIN search_terms st ON sh.search_term_id = st.id
+               GROUP BY sh.search_term_id, st.term
                ORDER BY searched_at DESC
                LIMIT %s''',
             (limit,)
@@ -250,7 +250,7 @@ def get_results_for_term(connection, search_term_id, engines=None):
                     AND cu2.url = cu.url
                 )
                 GROUP BY cu.id, cu.url, uf.term_occurrences
-                ORDER BY engine_count DESC, term_occurrences DESC
+                ORDER BY term_occurrences DESC, engine_count DESC
             '''
             params = [search_term_id, search_term_id] + engines + [search_term_id]
         else:
@@ -270,7 +270,7 @@ def get_results_for_term(connection, search_term_id, engines=None):
                     AND cu2.url = cu.url
                 )
                 GROUP BY cu.id, cu.url, uf.term_occurrences
-                ORDER BY engine_count DESC, term_occurrences DESC
+                ORDER BY term_occurrences DESC, engine_count DESC
             '''
             params = [search_term_id, search_term_id, search_term_id]
 
@@ -288,7 +288,7 @@ def get_clean_urls_for_term(connection, search_term_id):
     cursor = connection.cursor(dictionary=True)
     try:
         cursor.execute(
-            '''SELECT cu.id, cu.url, uf.term_occurrences, uf.source_engine_count,
+            '''SELECT cu.id, cu.url, uf.term_occurrences,
                       COUNT(DISTINCT cue.search_engine) AS engine_count
                FROM clean_urls cu
                LEFT JOIN url_frequency uf
@@ -301,8 +301,8 @@ def get_clean_urls_for_term(connection, search_term_id):
                    WHERE cu2.search_term_id = cu.search_term_id
                    AND cu2.url = cu.url
                )
-               GROUP BY cu.id, cu.url, uf.term_occurrences, uf.source_engine_count
-               ORDER BY engine_count DESC, uf.term_occurrences DESC''',
+               GROUP BY cu.id, cu.url, uf.term_occurrences
+               ORDER BY term_occurrences DESC, engine_count DESC''',
             (search_term_id, search_term_id, search_term_id)
         )
         return cursor.fetchall()

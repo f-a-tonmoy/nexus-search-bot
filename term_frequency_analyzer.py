@@ -150,27 +150,6 @@ def count_keywords(text, keywords, phrases):
 
 
 # ---------------------------------------------------------------------------
-# Source engine count
-# ---------------------------------------------------------------------------
-
-def get_source_engine_count(conn, clean_url_id, search_term_id):
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            '''SELECT COUNT(DISTINCT search_engine)
-               FROM clean_url_engines
-               WHERE clean_url_id = %s AND search_term_id = %s''',
-            (clean_url_id, search_term_id)
-        )
-        row = cursor.fetchone()
-        return row[0] if row else 0
-    except Exception:
-        return 0
-    finally:
-        cursor.close()
-
-
-# ---------------------------------------------------------------------------
 # Per-URL processing
 # ---------------------------------------------------------------------------
 
@@ -236,7 +215,7 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
         rows = get_clean_urls_for_term(conn, search_term_id)
         log.info(f'Existing results ({len(rows)} URLs):')
         for row in rows:
-            engines = row.get('engine_count') or row.get('source_engine_count') or 0
+            engines = row.get('engine_count') or 0
             score = row.get('term_occurrences') or 0
             log.debug(f'  engines={engines} score={score:>4} {row["url"]}')
         conn.close()
@@ -256,7 +235,7 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
         return False
 
     log.info(f'Processing {len(rows)} clean URLs...')
-    status(f'Counting keyword frequencies for {len(rows)} URLs...')
+    status(f'{len(rows)} unique URLs after deduplication. Scoring...')
 
     args_list = [
         (row['url'], row['id'], search_term_id, keywords, phrases)
@@ -277,9 +256,8 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
     log.info('Writing frequency data to DB...')
     inserted = 0
     for clean_url_id, term_id, url, score, error in results:
-        engine_count = get_source_engine_count(conn, clean_url_id, term_id)
-        log.debug(f'  engines={engine_count} score={score} {url}')
-        insert_url_frequency(conn, term_id, clean_url_id, score, engine_count)
+        log.debug(f'  score={score} {url}')
+        insert_url_frequency(conn, term_id, clean_url_id, score)
         inserted += 1
 
     conn.close()
