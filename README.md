@@ -115,7 +115,7 @@ nexus-search-bot/
 | `clean_urls` | Validated, deduplicated canonical URLs |
 | `clean_url_engines` | Tracks which engines returned each clean URL |
 | `url_frequency` | Phrase-weighted keyword frequency score per URL |
-| `search_history` | Log of every pipeline run with timestamp, linked to search term via FK |
+| `search_history` | Log of every pipeline run with timestamp |
 
 ---
 
