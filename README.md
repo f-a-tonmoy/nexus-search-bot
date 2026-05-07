@@ -14,7 +14,15 @@ Four search engines are scraped in parallel using `undetected_chromedriver` with
 
 #### *Transform - Validation and Deduplication*
 
-Raw URLs go through concurrent HEAD/GET validation to confirm reachability. Redirects are followed to their canonical form (`response.url`), and tracking parameters (`utm_*`, `msclkid`, `gclid`) are stripped before storage. This ensures URLs from different engines that redirect to the same page are correctly deduplicated.
+Raw URLs go through concurrent HEAD/GET validation to confirm reachability. Redirects are followed to their canonical form (`response.url`), and tracking parameters (`utm_*`, `msclkid`, `gclid`) are stripped before storage. During validation, NEXUS preserves the relationship between the original raw URL and the final canonical URL, so redirected pages can still be attributed back to the engine that found them.
+
+The pipeline logs counts at each stage:
+
+```
+raw scraped URLs -> reachable URL candidates -> unique clean URLs -> scored URLs
+```
+
+Reachable URL candidates can be higher than unique clean URLs because multiple engines or redirect variants may resolve to the same final page.
 
 Multi-engine attribution is tracked via a dedicated `clean_url_engines` table -- if Google and DuckDuckGo both return the same URL, it's stored once in `clean_urls` but attributed to both engines. This powers the engine count signal used in ranking.
 
@@ -97,8 +105,8 @@ nexus-search-bot/
 ├── .streamlit/
 │   └── config.toml             # Theme configuration
 ├── misc/
-│   ├── data_ingestion.py       # Early prototype (superseded)
-│   └── pipeline.ipynb          # Notebook prototype (superseded)
+│   ├── data_ingestion.py       # Early prototype (superseded; not covered by requirements.txt)
+│   └── pipeline.ipynb          # Notebook prototype (superseded; not covered by requirements.txt)
 ├── logs/                       # Auto-generated run logs (gitignored)
 ├── screenshots/                # Auto-generated screenshots (gitignored)
 └── chrome_profile/             # Browser profile (gitignored)
@@ -119,6 +127,20 @@ nexus-search-bot/
 
 ---
 
+## Rerun Behavior
+
+The Streamlit sidebar includes a **Rerun from scratch** action. For the current search term, it clears old run data from:
+
+- `url_frequency`
+- `clean_url_engines`
+- `clean_urls`
+- `raw_urls`
+- `search_history`
+
+It keeps the existing `search_terms` row, then reruns scraping, validation, deduplication, and scoring from a clean state for that term.
+
+---
+
 ## Prerequisites
 
 - Python 3.10+
@@ -133,6 +155,8 @@ nexus-search-bot/
 ```bash
 pip install -r requirements.txt
 ```
+
+`requirements.txt` contains the dependencies for the active Streamlit app and scraping/scoring pipeline. The superseded prototype files in `misc/` are not part of the active runtime and may require additional packages if run separately.
 
 ### 2. Create the database
 ```sql
