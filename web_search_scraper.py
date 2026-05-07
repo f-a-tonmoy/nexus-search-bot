@@ -5,14 +5,13 @@ import random
 import logging
 import threading
 from datetime import datetime
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlencode, unquote, urlparse
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 
 import requests
 import concurrent.futures
-from urllib.parse import urlparse, urlencode, parse_qs
 
 import tempfile
 import base64
@@ -131,7 +130,6 @@ def driver_setup():
         return uc.Chrome(
             options=options,
             browser_executable_path=BRAVE_PATH,
-            version_main=146
         )
 
 
@@ -314,7 +312,7 @@ def extract_links_from_dom(driver, engine_name, log):
 def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
     """
     Opens one browser session per engine and scrapes all pages.
-    Returns list of (page_no, filepath, urls) tuples.
+    Returns list of (page_no, urls) tuples.
     """
     def status(msg):
         if status_callback:
@@ -356,7 +354,7 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
                     f'CAPTCHA detected on {engine_name} page {page_no} -- skipping')
                 continue
 
-            filepath = resize_and_screenshot(driver, engine_name, page_no, log)
+            resize_and_screenshot(driver, engine_name, page_no, log)
             urls = extract_links_from_dom(driver, engine_name, log)
 
             if not urls:
@@ -364,10 +362,10 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
                     f'No URLs extracted from {engine_name} p{page_no} -- possible soft CAPTCHA or empty page')
                 status(
                     f'No results from {engine_name} page {page_no} -- possible CAPTCHA or block')
-                results.append((page_no, filepath, []))
+                results.append((page_no, []))
                 continue
 
-            results.append((page_no, filepath, urls))
+            results.append((page_no, urls))
 
             if page_no < pages:
                 lo, hi = ENGINE_DELAYS[engine_name]
@@ -461,7 +459,7 @@ def validate_urls(raw_urls, log):
             original_url = futures[future]
             result, reason = future.result()
             if result:
-                valid_urls.append(result)
+                valid_urls.append((original_url, result))
             else:
                 rejected.append((original_url, reason))
 
@@ -528,11 +526,9 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
     all_raw_urls = []
     raw_url_id_map = {}
     map_lock = threading.Lock()
-    startup_lock = threading.Lock()
     total_engines = len(active_engines)
 
-    def scrape_and_store(engine, startup_delay=0):
-        time.sleep(startup_delay)
+    def scrape_and_store(engine):
         thread_conn = get_db_connection()
         if not thread_conn:
             log.error(f'  {engine}: could not connect to DB')
@@ -541,7 +537,7 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
             status(f'Opening {engine}...')
             engine_results = scrape_engine(
                 search_term, engine, pages, log, status_callback=status_callback)
-            for page_no, filepath, urls in engine_results:
+            for page_no, urls in engine_results:
                 if not urls:
                     log.info(f'  {engine} p{page_no}: 0 URLs extracted')
                 else:
@@ -580,11 +576,20 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
         f'All engines scraped. {len(all_raw_urls)} total raw URLs collected.')
     status(f'Validating {len(all_raw_urls)} raw URLs for reachability...')
 
-    clean_urls = validate_urls(all_raw_urls, log)
+    clean_url_pairs = validate_urls(all_raw_urls, log)
+    clean_urls = [canonical_url for _, canonical_url in clean_url_pairs]
     status(f'{len(clean_urls)} reachable URLs confirmed.')
 
     log.debug(f'Inserting {len(clean_urls)} clean URLs into DB...')
-    insert_clean_urls(conn, search_term_id, raw_url_id_map, clean_urls)
+    insert_clean_urls(conn, search_term_id, raw_url_id_map, clean_url_pairs)
+
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT COUNT(*) FROM clean_urls WHERE search_term_id = %s',
+        (search_term_id,)
+    )
+    unique_clean_url_count = cursor.fetchone()[0]
+    cursor.close()
 
     insert_search_history(conn, search_term_id)
 
@@ -601,7 +606,8 @@ def run_pipeline(search_term, pages=3, engines=None, status_callback=None):
     log.info(f'  Total duration : {mins}m {secs}s')
     log.info(f'{"="*60}')
 
-    status(f'Done! {len(clean_urls)} URLs saved to database')
+    status(f'Done! {len(clean_urls)} reachable URLs processed.')
+    status(f'{unique_clean_url_count} unique clean URLs in database.')
     return search_term_id, clean_urls
 
 

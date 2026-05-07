@@ -93,6 +93,7 @@ def _normalize_url(url):
 def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
     """
     raw_url_id_map: dict of {url: [(raw_url_id, engine_name), ...]}
+    clean_urls: iterable of canonical URLs or (original_url, canonical_url) pairs
     """
     cursor = connection.cursor()
     inserted_ids = []
@@ -100,18 +101,36 @@ def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
         raw_url): entries for raw_url, entries in raw_url_id_map.items()}
 
     try:
-        for url in clean_urls:
+        for item in clean_urls:
+            if isinstance(item, tuple) and len(item) == 2:
+                original_url, url = item
+            else:
+                original_url = item
+                url = item
+
+            normalized_original = _normalize_url(original_url)
             normalized = _normalize_url(url)
-            entries = normalized_map.get(normalized)
+            entries = normalized_map.get(normalized_original)
+
+            if entries is None:
+                entries = normalized_map.get(normalized)
 
             if entries is None:
                 for norm_raw, e in normalized_map.items():
-                    if normalized in norm_raw or norm_raw in normalized:
+                    if (
+                        normalized_original in norm_raw
+                        or norm_raw in normalized_original
+                        or normalized in norm_raw
+                        or norm_raw in normalized
+                    ):
                         entries = e
                         break
 
             if entries is None:
-                print(f'  [DB] Warning: no raw_url match for {url}, skipping.')
+                print(
+                    f'  [DB] Warning: no raw_url match for '
+                    f'{original_url} -> {url}, skipping.'
+                )
                 continue
 
             first_raw_url_id = entries[0][0]
@@ -188,6 +207,36 @@ def insert_search_history(connection, search_term_id):
     except Error as e:
         connection.rollback()
         print(f'Failed to insert search history: {e}')
+    finally:
+        cursor.close()
+
+
+def clear_data_for_search_term(connection, search_term_id):
+    """Delete all run data for a search term while keeping the term itself."""
+    cursor = connection.cursor()
+    try:
+        tables = [
+            'url_frequency',
+            'clean_url_engines',
+            'clean_urls',
+            'raw_urls',
+            'search_history',
+        ]
+        deleted_counts = {}
+
+        for table in tables:
+            cursor.execute(
+                f'DELETE FROM {table} WHERE search_term_id = %s',
+                (search_term_id,)
+            )
+            deleted_counts[table] = cursor.rowcount
+
+        connection.commit()
+        return deleted_counts
+    except Error as e:
+        connection.rollback()
+        print(f'Failed to clear data for search_term_id={search_term_id}: {e}')
+        return None
     finally:
         cursor.close()
 

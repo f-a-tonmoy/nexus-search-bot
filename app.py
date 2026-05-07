@@ -2,8 +2,6 @@ import time
 import queue
 import threading
 import streamlit as st
-import logging
-import streamlit.components.v1 as components
 
 from term_frequency_analyzer import run_frequency
 from web_search_scraper import run_pipeline, SEARCH_ENGINES
@@ -14,14 +12,8 @@ from database_operations import (
     get_results_for_term,
     get_search_term_id,
     has_frequency_data,
+    clear_data_for_search_term,
 )
-
-logging.getLogger('streamlit').addFilter(
-    type('_F', (logging.Filter,), {
-        'filter': lambda self, r: 'st.components.v1.html' not in r.getMessage()
-    })()
-)
-
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -29,7 +21,7 @@ logging.getLogger('streamlit').addFilter(
 
 st.set_page_config(
     page_title='NEXUS',
-    page_icon='⬡',
+    page_icon='◆',
     layout='wide',
     initial_sidebar_state='expanded',
 )
@@ -87,6 +79,30 @@ st.markdown('''
         letter-spacing: -1px;
         color: var(--text-color);
         margin-bottom: 0;
+    }
+
+    .sidebar-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+
+    .sidebar-title-hex {
+        font-family: 'Space Mono', monospace;
+        font-size: 5rem;
+        font-weight: 700;
+        line-height: 1;
+        color: var(--text-color);
+    }
+
+    .sidebar-title-text {
+        font-family: 'Space Mono', monospace;
+        font-size: 3rem;
+        font-weight: 700;
+        letter-spacing: -1px;
+        line-height: 1;
+        color: var(--text-color);
     }
 
     .subtitle {
@@ -213,6 +229,7 @@ st.markdown('''
         color: #dc2626 !important;
         text-transform: uppercase;
         font-weight: 800;
+        margin-bottom: 8px;
     }
 
 
@@ -224,8 +241,6 @@ st.markdown('''
 
     section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
         gap: 0.75rem !important;
-    }
-        background-color: #2d3a8c !important;
     }
 
     /* Green color for completed status label */
@@ -326,18 +341,30 @@ def check_existing(term):
     return term_id, has_freq
 
 
+def clear_existing_search_data(search_term_id):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        return clear_data_for_search_term(conn, search_term_id)
+    finally:
+        conn.close()
+
+
+SESSION_DEFAULTS = {
+    'results': [],
+    'search_term_id': None,
+    'last_search': '',
+    'running': False,
+    'showed_existing': False,
+}
+
+
 # ---------------------------------------------------------------------------
 # Session state init
 # ---------------------------------------------------------------------------
 
-for key, default in {
-    'results': [],
-    'search_term_id': None,
-    'last_search': '',
-    'status_lines': [],
-    'running': False,
-    'showed_existing': False,
-}.items():
+for key, default in SESSION_DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -346,9 +373,12 @@ for key, default in {
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown('<div class="main-title">⬡ NEXUS</div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Search deeper, rank smarter</div>',
+    st.markdown('''
+    <div class="sidebar-title">
+        <span class="sidebar-title-hex">⬡</span>
+        <span class="sidebar-title-text">NEXUS</span>
+    </div>
+    ''',
                 unsafe_allow_html=True)
 
     st.markdown('---')
@@ -412,7 +442,7 @@ with st.sidebar:
     </style>
     <div class="danger-btn">
     ''', unsafe_allow_html=True)
-    rerun_btn = st.button('↺  Rerun from scratch',
+    rerun_btn = st.button('⟳  Rerun from scratch',
                           use_container_width=True, key='rerun_scratch')
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -446,7 +476,7 @@ if search_input and len(search_input) >= 3 and existing_terms:
                     st.session_state['last_search'] = match
                     st.rerun()
 
-search_btn = st.button('⬡  Search', use_container_width=True, type='primary')
+search_btn = st.button('Search', use_container_width=True, type='primary')
 
 # ---------------------------------------------------------------------------
 # Search logic
@@ -512,7 +542,7 @@ def render_log(placeholder, messages, animate_last=False):
     {js}
     '''
     with placeholder:
-        components.html(html, height=320, scrolling=False)
+        st.iframe(html, height=320)
 
 
 def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None):
@@ -536,6 +566,24 @@ def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None
             status_queue.put((msg, color) if color else msg)
 
     post(f'Initializing pipeline for: "{term}"', color=ACCENT)
+
+    if force_rerun:
+        existing_term_id, _ = check_existing(term)
+        if existing_term_id:
+            deleted_counts = clear_existing_search_data(existing_term_id)
+            if deleted_counts is None:
+                post('Failed to clear existing data. Check database logs.')
+                status_queue.put(None)
+                return
+            post(
+                'Cleared old data: '
+                f'{deleted_counts.get("raw_urls", 0)} raw URLs, '
+                f'{deleted_counts.get("clean_urls", 0)} clean URLs, '
+                f'{deleted_counts.get("clean_url_engines", 0)} engine links, '
+                f'{deleted_counts.get("url_frequency", 0)} scores, '
+                f'{deleted_counts.get("search_history", 0)} history rows.',
+                color=ACCENT
+            )
 
     term_id, clean_urls = run_pipeline(
         search_term=term,
@@ -590,7 +638,6 @@ def do_search(term, engines, pages, force_rerun=False):
         st.warning('Please select at least one search engine.')
         return
 
-    st.session_state['status_lines'] = []
     st.session_state['results'] = []
     st.session_state['last_search'] = term
     st.session_state['showed_existing'] = False
