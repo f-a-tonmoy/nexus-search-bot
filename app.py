@@ -1,3 +1,4 @@
+import re
 import time
 import queue
 import threading
@@ -303,6 +304,10 @@ new MutationObserver(applyNexusTheme).observe(document.body, {
 ALL_ENGINES = list(SEARCH_ENGINES.keys())
 
 
+# Cached so we don't hammer the DB on every keystroke / rerun.
+# The cache is cleared explicitly after a search runs so new history shows up
+# immediately instead of waiting for the TTL to expire.
+@st.cache_data(ttl=60, show_spinner=False)
 def load_search_terms():
     conn = get_db_connection()
     if not conn:
@@ -312,6 +317,7 @@ def load_search_terms():
     return [t['term'] for t in terms]
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def load_recent_searches(limit=3):
     conn = get_db_connection()
     if not conn:
@@ -321,12 +327,21 @@ def load_recent_searches(limit=3):
     return recent
 
 
+def invalidate_search_caches():
+    """Call after any pipeline run so the sidebar shows fresh data."""
+    load_search_terms.clear()
+    load_recent_searches.clear()
+
+
 def load_results(search_term_id, engines):
     conn = get_db_connection()
     if not conn:
         return []
+    # Set comparison so order from the multiselect widget doesn't matter --
+    # if every engine is selected, pass None to skip the JOIN filter entirely.
+    all_selected = set(engines) == set(ALL_ENGINES)
     results = get_results_for_term(
-        conn, search_term_id, engines if engines != ALL_ENGINES else None)
+        conn, search_term_id, None if all_selected else engines)
     conn.close()
     return results
 
@@ -357,6 +372,7 @@ SESSION_DEFAULTS = {
     'last_search': '',
     'running': False,
     'showed_existing': False,
+    'pending_search': False,
 }
 
 
@@ -395,7 +411,7 @@ with st.sidebar:
     st.markdown('<div class="section-label">Pages per Engine</div>',
                 unsafe_allow_html=True)
     pages = st.number_input('Pages', min_value=1, max_value=5,
-                            value=1, step=1, label_visibility='collapsed')
+                            value=2, step=1, label_visibility='collapsed')
 
     st.markdown('---')
     st.markdown('<div class="section-label">Recent Searches</div>',
@@ -406,19 +422,28 @@ with st.sidebar:
         for r in recent:
             ts = r['searched_at'].strftime('%H:%M') if hasattr(
                 r['searched_at'], 'strftime') else ''
-            st.markdown(f'''
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                <span style="font-family:\'Space Mono\',monospace; font-size:0.82rem;
-                             color:#666; white-space:nowrap;">{ts}</span>
-            </div>
-            ''', unsafe_allow_html=True)
-            if st.button(
-                r['search_term'],
-                key=f"recent_{r['search_term']}_{r['searched_at']}",
-                use_container_width=True,
-            ):
-                st.session_state['last_search'] = r['search_term']
-                st.rerun()
+            # Two columns: timestamp pinned to the left, button on the right.
+            # vertical_alignment='top' keeps the timestamp aligned with the
+            # first line of the term when the button wraps to multiple lines.
+            ts_col, btn_col = st.columns(
+                [0.8, 5], gap='small', vertical_alignment='top')
+            with ts_col:
+                st.markdown(
+                    f'<div style="font-family:Space Mono,monospace;'
+                    f'font-size:0.8rem;color:var(--text-color);opacity:0.55;'
+                    f'padding:9px 0 0 0;white-space:nowrap;text-align:right;">'
+                    f'{ts}</div>',
+                    unsafe_allow_html=True,
+                )
+            with btn_col:
+                if st.button(
+                    r['search_term'],
+                    key=f"recent_{r['search_term']}_{r['searched_at']}",
+                    use_container_width=True,
+                ):
+                    st.session_state['last_search'] = r['search_term']
+                    st.session_state['pending_search'] = True
+                    st.rerun()
     else:
         st.caption('No recent searches yet.')
 
@@ -575,15 +600,16 @@ def run_full_pipeline(term, engines, pages, force_rerun=False, status_queue=None
                 post('Failed to clear existing data. Check database logs.')
                 status_queue.put(None)
                 return
-            post(
-                'Cleared old data: '
-                f'{deleted_counts.get("raw_urls", 0)} raw URLs, '
-                f'{deleted_counts.get("clean_urls", 0)} clean URLs, '
-                f'{deleted_counts.get("clean_url_engines", 0)} engine links, '
-                f'{deleted_counts.get("url_frequency", 0)} scores, '
-                f'{deleted_counts.get("search_history", 0)} history rows.',
-                color=ACCENT
-            )
+            if sum(deleted_counts.values()) > 0:
+                post(
+                    'Cleared old data: '
+                    f'{deleted_counts.get("raw_urls", 0)} raw URLs, '
+                    f'{deleted_counts.get("clean_url_engines", 0)} engine links, '
+                    f'{deleted_counts.get("clean_urls", 0)} clean URLs, '
+                    f'{deleted_counts.get("url_frequency", 0)} scores, '
+                    f'{deleted_counts.get("search_history", 0)} history rows.',
+                    color=ACCENT
+                )
 
     term_id, clean_urls = run_pipeline(
         search_term=term,
@@ -632,6 +658,11 @@ def do_search(term, engines, pages, force_rerun=False):
     term = term.strip().lower()
     if not term:
         st.warning('Please enter a search term.')
+        return
+
+    # Must contain at least one real word (letters), not just digits / punctuation
+    if not re.search(r'[a-z]', term):
+        st.warning('Please enter at least one word to search.')
         return
 
     if not engines:
@@ -734,10 +765,13 @@ def do_search(term, engines, pages, force_rerun=False):
                     # Single render per message -- JS handles word-by-word reveal
                     messages[-1] = (msg_text, msg_color)
                     render_log(log_placeholder, messages, animate_last=True)
-                    # Wait for JS animation to finish before next message
+                    # Wait briefly so the JS reveal doesn't get clobbered by the
+                    # next message, but cap it so long status lines don't freeze
+                    # the UI for several seconds.
                     word_count = len(msg_text.split())
-                    time.sleep(word_count * 0.065 + 0.1)
-            except Exception:
+                    time.sleep(min(word_count * 0.04 + 0.05, 0.5))
+            except queue.Empty:
+                # Normal -- no new status yet. Exit only if the worker died.
                 if not thread.is_alive():
                     break
 
@@ -748,15 +782,40 @@ def do_search(term, engines, pages, force_rerun=False):
         st.session_state['results'] = load_results(final_term_id, engines)
 
 
-if search_btn and search_input and not st.session_state.get('running'):
-    st.session_state['running'] = True
-    do_search(search_input, selected_engines, pages, force_rerun=False)
-    st.session_state['running'] = False
+# Auto-trigger search after clicking a "Recent Searches" button -- the click
+# sets `pending_search=True` and reruns. We pick it up here and fire the
+# search exactly once, then clear the flag.
+if st.session_state.get('pending_search') and not st.session_state.get('running'):
+    st.session_state['pending_search'] = False
+    if search_input and search_input.strip():
+        st.session_state['running'] = True
+        try:
+            do_search(search_input, selected_engines, pages, force_rerun=False)
+        finally:
+            st.session_state['running'] = False
+            invalidate_search_caches()
 
-if rerun_btn and search_input and not st.session_state.get('running'):
-    st.session_state['running'] = True
-    do_search(search_input, selected_engines, pages, force_rerun=True)
-    st.session_state['running'] = False
+if search_btn and not st.session_state.get('running'):
+    if not search_input or not search_input.strip():
+        st.warning('Please enter a search term.')
+    else:
+        st.session_state['running'] = True
+        try:
+            do_search(search_input, selected_engines, pages, force_rerun=False)
+        finally:
+            st.session_state['running'] = False
+            invalidate_search_caches()
+
+if rerun_btn and not st.session_state.get('running'):
+    if not search_input or not search_input.strip():
+        st.warning('Please enter a search term to rerun.')
+    else:
+        st.session_state['running'] = True
+        try:
+            do_search(search_input, selected_engines, pages, force_rerun=True)
+        finally:
+            st.session_state['running'] = False
+            invalidate_search_caches()
 
 # ---------------------------------------------------------------------------
 # Results display
@@ -787,7 +846,8 @@ if results:
 
     for i, row in enumerate(results, 1):
         url = row['url']
-        score = row.get('term_occurrences') or 0
+        # DB returns Decimal -- cast to float so :.2f formatting works
+        score = float(row.get('relevance_score') or 0)
         engine_count = row.get('engine_count') or 0
 
         # Engine count bar (max 4 engines)
@@ -797,7 +857,7 @@ if results:
 
         st.markdown(f'''
         <div class="result-card">
-            <div class="result-rank">#{i:02d} &nbsp;|&nbsp; engines: {engine_bar} ({engine_count}/{len(ALL_ENGINES)}) &nbsp;|&nbsp; score: <span style="color:var(--nexus-accent);font-size:1.05rem;font-weight:800;">{score}</span></div>
+            <div class="result-rank">#{i:02d} &nbsp;|&nbsp; engines: {engine_bar} ({engine_count}/{len(ALL_ENGINES)}) &nbsp;|&nbsp; score: <span style="color:var(--nexus-accent);font-size:1.05rem;font-weight:800;">{score:.2f}</span></div>
             <a class="result-url" href="{url}" target="_blank">{url}</a>
         </div>
         ''', unsafe_allow_html=True)

@@ -36,7 +36,7 @@ Each validated URL is fetched and its visible text extracted using BeautifulSoup
 
 Weights scale linearly with phrase length -- a trigram match is three times as specific as a single keyword match.
 
-This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently. Scores and engine counts are written to `url_frequency` and results are ranked by `term_occurrences DESC, engine_count DESC`.
+This rewards pages that discuss the topic in context rather than pages that happen to contain the individual words independently. Scores are written to `url_frequency` and results are ranked by `relevance_score DESC, engine_count DESC` (relevance is the primary signal; engine consensus breaks ties).
 
 ---
 
@@ -138,6 +138,15 @@ The Streamlit sidebar includes a **Rerun from scratch** action. For the current 
 - `search_history`
 
 It keeps the existing `search_terms` row, then reruns scraping, validation, deduplication, and scoring from a clean state for that term.
+
+---
+
+## Documentation
+
+For a full write-up of the design, including the database schema, scoring model, query decomposition example, limitations, and a code appendix, see the project report and presentation in the parent directory:
+
+- `NEXUS_Project_Report.pdf` — full project report (DSE I2400)
+- `NEXUS_Project_Slides.pptx` — presentation deck
 
 ---
 

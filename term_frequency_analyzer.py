@@ -26,7 +26,7 @@ STOP_WORDS = {
     'no', 'nor', 'so', 'yet', 'both', 'either', 'neither', 'that', 'this',
     'these', 'those', 'it', 'its', 'we', 'you', 'he', 'she', 'they',
     'their', 'our', 'your', 'my', 'his', 'her', 'which', 'who', 'whom',
-    'what', 'how', 'when', 'where', 'why', 'best', 'most', 'more', 'very',
+    'what', 'how', 'when', 'where', 'why', 'most', 'more', 'very',
     'just', 'also', 'about', 'than', 'then', 'each', 'other', 'such',
     'into', 'over', 'after', 'before', 'between', 'through', 'during',
     'including', 'across', 'among', 'within',
@@ -98,8 +98,14 @@ def extract_phrases(search_term):
 # ---------------------------------------------------------------------------
 
 def fetch_page_text(url, timeout=10):
+    # Full browser User-Agent + standard accept headers so sites with
+    # anti-bot heuristics don't refuse the page content fetch.
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/120.0.0.0 Safari/537.36'),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
     }
     try:
         response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
@@ -118,7 +124,38 @@ def fetch_page_text(url, timeout=10):
         return None, str(e)
 
 
-def count_keywords(text, keywords, phrases):
+def _word_pattern(term):
+    """Build a whole-word regex for `term` that also matches the plural form.
+    Examples:
+      'cancer'    -> \\bcancers?\\b           (matches 'cancer' or 'cancers')
+      'hospitals' -> \\bhospitals?\\b         (matches 'hospital' or 'hospitals')
+      'data engineering' -> \\bdata engineerings?\\b
+    The trailing-s heuristic is applied only to the LAST word so that bigrams
+    and trigrams pluralize correctly ('childhood cancer' -> 'childhood cancers').
+    Words ending in 's' that are <= 3 chars (e.g. 'us', 'is', 'gas') keep their
+    final 's' literal to avoid false matches.
+    """
+    parts = [re.escape(p) for p in term.split()]
+    if not parts:
+        return r'(?!)'  # never matches
+    last = parts[-1]
+    if last.endswith('s') and len(last) > 3:
+        # Likely already plural -- make the trailing s optional
+        parts[-1] = last[:-1] + 's?'
+    else:
+        # Allow optional plural-s suffix
+        parts[-1] = last + 's?'
+    return rf'\b{" ".join(parts)}\b'
+
+
+def _count_whole_word(text, term):
+    """Count whole-word occurrences of `term` (and its plural form) in `text`.
+    Uses word boundaries so 'data' won't match inside 'metadata' / 'database',
+    and accepts both singular and plural forms of the final word."""
+    return len(re.findall(_word_pattern(term), text))
+
+
+def score_page(text, keywords, phrases):
     """
     Score a page using individual keywords and phrases, normalized by page length.
     Weights scale linearly with phrase length:
@@ -129,15 +166,19 @@ def count_keywords(text, keywords, phrases):
     Raw score is divided by log(word_count) to normalize for page length.
     This prevents long pages (e.g. faculty profiles, CVs) from dominating
     purely due to higher word count.
+
+    Matches are word-boundary anchored and plural-aware -- 'cancer' matches
+    both 'cancer' and 'cancers', but won't match inside 'metadata'.
+
+    Returns a float rounded to 2 decimal places.
     """
 
-    kw_score = sum(text.count(kw) for kw in keywords)
+    kw_score = sum(_count_whole_word(text, kw) for kw in keywords)
 
     phrase_score = 0
     for ph in phrases:
-        word_count = len(ph.split())
-        weight = word_count
-        phrase_score += text.count(ph) * weight
+        weight = len(ph.split())
+        phrase_score += _count_whole_word(text, ph) * weight
 
     raw_score = kw_score + phrase_score
 
@@ -145,8 +186,8 @@ def count_keywords(text, keywords, phrases):
     page_word_count = max(len(text.split()), 1)
     normalized = raw_score / math.log(page_word_count + 1)
 
-    # Return as integer score rounded to nearest whole number
-    return round(normalized)
+    # Keep 2 decimal places so weak-but-real signal isn't rounded to 0
+    return round(normalized, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +199,8 @@ def process_url(args):
     text, error = fetch_page_text(url)
     if text is None:
         return clean_url_id, search_term_id, url, 0, error
-    total = count_keywords(text, keywords, phrases)
-    return clean_url_id, search_term_id, url, total, None
+    score = score_page(text, keywords, phrases)
+    return clean_url_id, search_term_id, url, score, None
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +257,8 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
         log.info(f'Existing results ({len(rows)} URLs):')
         for row in rows:
             engines = row.get('engine_count') or 0
-            score = row.get('term_occurrences') or 0
-            log.debug(f'  engines={engines} score={score:>4} {row["url"]}')
+            score = float(row.get('relevance_score') or 0)
+            log.debug(f'  engines={engines} score={score:>6.2f} {row["url"]}')
         conn.close()
         return False
 
@@ -250,7 +291,7 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
             if error:
                 log.debug(f'  FAILED [{error}] {url}')
             else:
-                log.debug(f'  score={score:>4} {url}')
+                log.debug(f'  score={score:>6.2f} {url}')
             results.append((clean_url_id, term_id, url, score, error))
 
     log.info('Writing frequency data to DB...')
@@ -279,52 +320,65 @@ def run_frequency(search_term_id, search_term, log=None, status_callback=None, f
 if __name__ == '__main__':
     log = setup_logger()
 
+    # Use one connection for all metadata queries -- run_frequency manages
+    # its own connection internally, so we close this one before invoking it.
     conn = get_db_connection()
     if not conn:
         log.error('Could not connect to DB.')
         exit(1)
 
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute('SELECT id, term FROM search_terms ORDER BY id DESC')
-    terms = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor(dictionary=True)
 
-    if not terms:
-        log.error('No search terms found in DB.')
-        exit(1)
+        # List all terms
+        cursor.execute('SELECT id, term FROM search_terms ORDER BY id DESC')
+        terms = cursor.fetchall()
+        if not terms:
+            log.error('No search terms found in DB.')
+            exit(1)
 
-    print('\nAvailable search terms:')
-    for t in terms:
-        print(f"  [{t['id']}] {t['term']}")
+        print('\nAvailable search terms:')
+        for t in terms:
+            print(f"  [{t['id']}] {t['term']}")
 
-    choice = input('\nEnter search term id to process (or "all"): ').strip().lower()
+        choice = input('\nEnter search term id to process (or "all"): ').strip().lower()
 
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+        # Pick selection (still on the same connection)
+        if choice == 'all':
+            selected = terms
+        else:
+            cursor.execute(
+                'SELECT id, term FROM search_terms WHERE id = %s', (choice,))
+            selected = cursor.fetchall()
 
-    if choice == 'all':
-        cursor.execute('SELECT id, term FROM search_terms')
-        selected = cursor.fetchall()
-    else:
-        cursor.execute('SELECT id, term FROM search_terms WHERE id = %s', (choice,))
-        selected = cursor.fetchall()
+        # Per-term existing-data counts in one query
+        existing_counts = {}
+        if selected:
+            ids = tuple(t['id'] for t in selected)
+            placeholders = ','.join(['%s'] * len(ids))
+            cursor.execute(
+                f'''SELECT search_term_id, COUNT(*) AS n
+                    FROM url_frequency
+                    WHERE search_term_id IN ({placeholders})
+                    GROUP BY search_term_id''',
+                ids,
+            )
+            existing_counts = {row['search_term_id']: row['n']
+                               for row in cursor.fetchall()}
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+    finally:
+        conn.close()
 
+    # Now drive run_frequency for each selected term
     for t in selected:
-        # CLI mode -- ask user if existing data should be reused
-        conn2 = get_db_connection()
-        cursor2 = conn2.cursor()
-        cursor2.execute('SELECT COUNT(*) FROM url_frequency WHERE search_term_id = %s', (t['id'],))
-        count = cursor2.fetchone()[0]
-        cursor2.close()
-        conn2.close()
-
+        count = existing_counts.get(t['id'], 0)
         force = False
         if count > 0:
-            ans = input(f'\nFrequency data exists for "{t["term"]}" ({count} records). Rerun? (y/n): ').strip().lower()
+            ans = input(
+                f'\nFrequency data exists for "{t["term"]}" '
+                f'({count} records). Rerun? (y/n): '
+            ).strip().lower()
             force = (ans == 'y')
 
         run_frequency(t['id'], t['term'], log, force_rerun=force)

@@ -4,8 +4,9 @@ import time
 import random
 import logging
 import threading
+import subprocess
 from datetime import datetime
-from urllib.parse import parse_qs, urlencode, unquote, urlparse
+from urllib.parse import parse_qs, urlencode, unquote, urlparse, quote_plus
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -22,11 +23,35 @@ from database_operations import (
     insert_raw_urls,
     insert_clean_urls,
     insert_search_history,
+    TRACKING_PARAMS,
 )
 
 BASE_DIR = r'e:\CCNY\DSE I2400 - Data Engineering\Project 1\Custom Bot'
-BRAVE_PATH = r'C:\Program Files\BraveSoftware\Brave-Browser-Nightly\Application\brave.exe'
+# Stable Brave -- the Nightly build occasionally ships with broken headless
+# DevTools support. Stable lags by a few weeks but is more reliable for
+# automation. If only Nightly is installed, point this at it instead.
+BRAVE_PATH = r'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe'
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+
+
+def _detect_brave_major_version():
+    """Read Brave's installed version from the EXE so we can tell
+    undetected-chromedriver which ChromeDriver to download. Without this,
+    uc defaults to Chrome 108, which can't talk to newer Brave builds
+    (Brave Nightly is currently on Chrome 148+)."""
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-Command',
+             f"(Get-Item '{BRAVE_PATH}').VersionInfo.ProductVersion"],
+            capture_output=True, text=True, timeout=5,
+        )
+        version = result.stdout.strip()  # e.g. "148.1.92.56"
+        return int(version.split('.')[0])  # -> 148
+    except Exception:
+        return None  # let uc fall back to its default
+
+
+BRAVE_MAJOR = _detect_brave_major_version()
 
 SEARCH_ENGINES = {
     'Google':     'https://www.google.com/search?q=',
@@ -36,18 +61,25 @@ SEARCH_ENGINES = {
 }
 
 DOM_SELECTORS = {
-    'Google':     'div.g a[jsname="UWckNb"], a[jsname="UWckNb"], a[ping]',
+    'Google':     '#search div.g a:has(h3), #search div[data-hveid] a:has(h3), div#search div.g a[href^="http"]',
     'Bing':       'li.b_algo h2 a, li.b_algo .b_title a',
     'Yahoo':      'div.algo-sr a[href], div.compTitle a[href]',
     'DuckDuckGo': 'a[data-testid="result-title-a"], h2.EKtkFWMYpwzMKOYr a',
 }
 
 ENGINE_DELAYS = {
-    'Google':     (2, 5),
-    'Bing':       (5, 15),
-    'Yahoo':      (2, 5),
-    'DuckDuckGo': (2, 5),
+    # Inter-page delays per engine (seconds). Slight bump over the original
+    # 2-5s baseline to reduce CAPTCHA rate without bloating run time.
+    'Google':     (5, 10),
+    'Bing':       (6, 12),
+    'Yahoo':      (3, 7),
+    'DuckDuckGo': (3, 7),
 }
+
+# Extra cool-down applied after a CAPTCHA is detected on an engine,
+# before that engine attempts the next page. Helps avoid hammering an engine
+# that's already flagged us as a bot.
+CAPTCHA_BACKOFF = (15, 30)
 
 # Noise path patterns to exclude regardless of domain
 EXCLUDED_PATHS = {
@@ -126,15 +158,23 @@ def driver_setup():
     ]
     options.add_argument(f'--user-agent={random.choice(user_agents)}')
 
+    kwargs = {
+        'options': options,
+        'browser_executable_path': BRAVE_PATH,
+    }
+    # If we successfully read Brave's major version, pin it so uc downloads
+    # the matching ChromeDriver instead of defaulting to v108.
+    if BRAVE_MAJOR:
+        kwargs['version_main'] = BRAVE_MAJOR
+
     with DRIVER_INIT_LOCK:
-        return uc.Chrome(
-            options=options,
-            browser_executable_path=BRAVE_PATH,
-        )
+        return uc.Chrome(**kwargs)
 
 
 def get_search_url(search_term, engine_name, page_no=1):
-    safe_term = search_term.replace(' ', '+')
+    # Use quote_plus so special chars (&, =, %, +, etc.) are properly encoded,
+    # not just spaces. e.g. 'r&d budgets' -> 'r%26d+budgets'
+    safe_term = quote_plus(search_term)
     url = f'{SEARCH_ENGINES[engine_name]}{safe_term}'
 
     if page_no > 1:
@@ -171,8 +211,10 @@ def is_captcha_page(driver, engine_name=None, log=None):
         signals = ['captcha', 'unusual traffic',
                    'not a robot', 'verify you are human', 'blocked']
         for signal in signals:
-            # Bing embeds "blocked" in JS/CSS on normal pages -- check title only
-            if engine_name == 'Bing':
+            # Bing embeds the word "blocked" in JS/CSS on normal pages,
+            # so for that ONE signal we only trust the page title.
+            # All other signals are still checked in both source and title.
+            if engine_name == 'Bing' and signal == 'blocked':
                 matched = signal in title
             else:
                 matched = signal in src or signal in title
@@ -259,6 +301,40 @@ def is_noise_url(url):
     return False
 
 
+# Paid-ad landing page path markers (e.g. /paidmedia, /lp/, /ads/)
+AD_PATH_MARKERS = {
+    '/paidmedia', '/landing', '/lp/', '/ads/', '/sponsored', '/promo/',
+}
+
+# Query params whose mere presence indicates the URL came from a paid ad click
+# (Google Ads, Microsoft Ads, DoubleClick, etc.)
+AD_QUERY_PARAMS = {
+    'campaignid', 'adgroupid', 'creativeid', 'adgroup', 'targetid',
+    'bidmatchtype', 'matchtype', 'adposition', 'extensionid',
+    'gclid', 'msclkid', 'dclid', 'gbraid', 'wbraid', 'gad_source',
+}
+
+
+def is_ad_url(url):
+    """Detect paid-ad landing URLs by path markers and ad-platform query params."""
+    try:
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+
+        # Path markers -- '/paidmedia', '/lp/', etc.
+        if any(marker in path for marker in AD_PATH_MARKERS):
+            return True
+
+        # Query params that only ad platforms attach to click-through URLs
+        if parsed.query:
+            params = {k.lower() for k in parse_qs(parsed.query).keys()}
+            if params & AD_QUERY_PARAMS:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def extract_links_from_dom(driver, engine_name, log):
     selector = DOM_SELECTORS[engine_name]
     log.debug(f'DOM selector: {selector}')
@@ -291,6 +367,10 @@ def extract_links_from_dom(driver, engine_name, log):
 
             if is_noise_url(real_url):
                 log.debug(f'Noise URL skipped: {real_url}')
+                continue
+
+            if is_ad_url(real_url):
+                log.debug(f'Ad URL skipped: {real_url}')
                 continue
 
             urls.append(real_url)
@@ -352,6 +432,16 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
                 log.warning(f'CAPTCHA on {engine_name} p{page_no} -- skipping')
                 status(
                     f'CAPTCHA detected on {engine_name} page {page_no} -- skipping')
+                # Cool down before trying the next page on this engine,
+                # so we don't immediately hammer an already-flagged engine.
+                if page_no < pages:
+                    lo, hi = CAPTCHA_BACKOFF
+                    cooldown = random.uniform(lo, hi)
+                    log.debug(
+                        f'CAPTCHA cool-down: sleeping {cooldown:.1f}s before next page')
+                    status(
+                        f'{engine_name}: cooling down {int(cooldown)}s after CAPTCHA')
+                    time.sleep(cooldown)
                 continue
 
             resize_and_screenshot(driver, engine_name, page_no, log)
@@ -384,13 +474,7 @@ def scrape_engine(search_term, engine_name, pages, log, status_callback=None):
 # URL validation
 # ---------------------------------------------------------------------------
 
-TRACKING_PARAMS = {
-    'msclkid', 'msockid', 'gclid', 'fbclid',
-    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-    'ad_group', 'pn_mapping', 'ref', 'referrer',
-    'mc_cid', 'mc_eid', 'igshid', 'trk', 'trkInfo',
-    '_hsenc', '_hsmi', 'hsCtaTracking',
-}
+# TRACKING_PARAMS imported from database_operations (single source of truth).
 
 
 def strip_tracking_params(url):
@@ -412,8 +496,15 @@ def strip_tracking_params(url):
 
 def process_single_url(url):
     url = strip_tracking_params(url)
+    # Use a full, realistic browser User-Agent so sites that block obvious bots
+    # don't incorrectly return 401/403 for URLs that are actually reachable.
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/120.0.0.0 Safari/537.36'),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
     try:
         parsed = urlparse(url)
         path = parsed.path.rstrip('/')
@@ -424,17 +515,18 @@ def process_single_url(url):
         response = requests.head(
             clean_url, headers=headers, timeout=5, allow_redirects=True)
 
-        if response.status_code < 404 or response.status_code == 405:
+        if response.status_code < 400:
             # Use the final URL after redirects as the canonical form
             canonical = response.url.rstrip('/')
             return canonical, None
 
-        # Some sites (e.g. Newsweek) block HEAD -- retry with GET
-        if response.status_code == 406:
+        # Some sites block or reject HEAD (405 Method Not Allowed,
+        # 406 Not Acceptable). Retry with GET to confirm reachability.
+        if response.status_code in (405, 406):
             response = requests.get(
                 clean_url, headers=headers, timeout=5, allow_redirects=True, stream=True)
             response.close()
-            if response.status_code < 404 or response.status_code == 405:
+            if response.status_code < 400:
                 canonical = response.url.rstrip('/')
                 return canonical, None
 

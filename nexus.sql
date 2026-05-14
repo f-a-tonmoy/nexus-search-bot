@@ -120,7 +120,7 @@ CREATE TABLE `url_frequency` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `clean_url_id` bigint NOT NULL,
   `search_term_id` int NOT NULL,
-  `term_occurrences` int NOT NULL DEFAULT '0',
+  `relevance_score` decimal(8,2) NOT NULL DEFAULT '0.00',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_freq` (`clean_url_id`,`search_term_id`),

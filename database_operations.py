@@ -71,6 +71,14 @@ TRACKING_PARAMS = {
 def _normalize_url(url):
     try:
         parsed = urlparse(url)
+
+        # Lowercase scheme + host. Strip leading "www." so the same page is
+        # stored once regardless of whether an engine returned the www form.
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+        if netloc.startswith('www.'):
+            netloc = netloc[4:]
+
         path = parsed.path.rstrip('/')
 
         # Strip tracking query params, keep the rest
@@ -82,7 +90,7 @@ def _normalize_url(url):
         else:
             query = ''
 
-        normalized = f'{parsed.scheme}://{parsed.netloc}{path}'
+        normalized = f'{scheme}://{netloc}{path}'
         if query:
             normalized += f'?{query}'
         return normalized
@@ -115,16 +123,9 @@ def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
             if entries is None:
                 entries = normalized_map.get(normalized)
 
-            if entries is None:
-                for norm_raw, e in normalized_map.items():
-                    if (
-                        normalized_original in norm_raw
-                        or norm_raw in normalized_original
-                        or normalized in norm_raw
-                        or norm_raw in normalized
-                    ):
-                        entries = e
-                        break
+            # Substring fallback removed -- it could mis-link `/page1` to `/page12`.
+            # If neither the original nor canonical URL has a normalized match,
+            # we don't trust an approximate one.
 
             if entries is None:
                 print(
@@ -173,16 +174,16 @@ def insert_clean_urls(connection, search_term_id, raw_url_id_map, clean_urls):
         cursor.close()
 
 
-def insert_url_frequency(connection, search_term_id, clean_url_id, term_occurrences):
+def insert_url_frequency(connection, search_term_id, clean_url_id, relevance_score):
     cursor = connection.cursor()
     try:
         cursor.execute(
             '''INSERT INTO url_frequency
-                   (clean_url_id, search_term_id, term_occurrences)
+                   (clean_url_id, search_term_id, relevance_score)
                VALUES (%s, %s, %s)
                ON DUPLICATE KEY UPDATE
-                   term_occurrences = VALUES(term_occurrences)''',
-            (clean_url_id, search_term_id, term_occurrences)
+                   relevance_score = VALUES(relevance_score)''',
+            (clean_url_id, search_term_id, relevance_score)
         )
         connection.commit()
         return cursor.lastrowid
@@ -279,15 +280,17 @@ def get_results_for_term(connection, search_term_id, engines=None):
     """
     Fetch ranked URLs for a search term.
     Optionally filter by a list of engine names.
-    Returns rows ordered by engine_count DESC, term_occurrences DESC.
+    Returns rows ordered by relevance_score DESC, engine_count DESC.
     """
     cursor = connection.cursor(dictionary=True)
     try:
+        # No per-row dedup subquery -- the UNIQUE (search_term_id, url(512))
+        # constraint on clean_urls already prevents duplicates per term.
         if engines:
             placeholders = ','.join(['%s'] * len(engines))
             query = f'''
                 SELECT cu.id, cu.url,
-                       COALESCE(uf.term_occurrences, 0) AS term_occurrences,
+                       COALESCE(uf.relevance_score, 0) AS relevance_score,
                        COUNT(DISTINCT cue.search_engine) AS engine_count
                 FROM clean_urls cu
                 LEFT JOIN url_frequency uf
@@ -296,20 +299,15 @@ def get_results_for_term(connection, search_term_id, engines=None):
                     ON cu.id = cue.clean_url_id AND cue.search_term_id = %s
                     AND cue.search_engine IN ({placeholders})
                 WHERE cu.search_term_id = %s
-                AND cu.id = (
-                    SELECT MIN(cu2.id) FROM clean_urls cu2
-                    WHERE cu2.search_term_id = cu.search_term_id
-                    AND cu2.url = cu.url
-                )
-                GROUP BY cu.id, cu.url, uf.term_occurrences
-                ORDER BY term_occurrences DESC, engine_count DESC
+                GROUP BY cu.id, cu.url, uf.relevance_score
+                ORDER BY relevance_score DESC, engine_count DESC
             '''
             params = [search_term_id, search_term_id] + \
                 engines + [search_term_id]
         else:
             query = '''
                 SELECT cu.id, cu.url,
-                       COALESCE(uf.term_occurrences, 0) AS term_occurrences,
+                       COALESCE(uf.relevance_score, 0) AS relevance_score,
                        COUNT(DISTINCT cue.search_engine) AS engine_count
                 FROM clean_urls cu
                 LEFT JOIN url_frequency uf
@@ -317,13 +315,8 @@ def get_results_for_term(connection, search_term_id, engines=None):
                 LEFT JOIN clean_url_engines cue
                     ON cu.id = cue.clean_url_id AND cue.search_term_id = %s
                 WHERE cu.search_term_id = %s
-                AND cu.id = (
-                    SELECT MIN(cu2.id) FROM clean_urls cu2
-                    WHERE cu2.search_term_id = cu.search_term_id
-                    AND cu2.url = cu.url
-                )
-                GROUP BY cu.id, cu.url, uf.term_occurrences
-                ORDER BY term_occurrences DESC, engine_count DESC
+                GROUP BY cu.id, cu.url, uf.relevance_score
+                ORDER BY relevance_score DESC, engine_count DESC
             '''
             params = [search_term_id, search_term_id, search_term_id]
 
@@ -340,8 +333,10 @@ def get_clean_urls_for_term(connection, search_term_id):
     """Used by term_frequency_analyzer -- returns all clean URLs for scoring."""
     cursor = connection.cursor(dictionary=True)
     try:
+        # UNIQUE (search_term_id, url(512)) on clean_urls already prevents
+        # per-term duplicates -- no need for the MIN(id) dedup subquery.
         cursor.execute(
-            '''SELECT cu.id, cu.url, uf.term_occurrences,
+            '''SELECT cu.id, cu.url, uf.relevance_score,
                       COUNT(DISTINCT cue.search_engine) AS engine_count
                FROM clean_urls cu
                LEFT JOIN url_frequency uf
@@ -349,13 +344,8 @@ def get_clean_urls_for_term(connection, search_term_id):
                LEFT JOIN clean_url_engines cue
                    ON cu.id = cue.clean_url_id AND cue.search_term_id = %s
                WHERE cu.search_term_id = %s
-               AND cu.id = (
-                   SELECT MIN(cu2.id) FROM clean_urls cu2
-                   WHERE cu2.search_term_id = cu.search_term_id
-                   AND cu2.url = cu.url
-               )
-               GROUP BY cu.id, cu.url, uf.term_occurrences
-               ORDER BY term_occurrences DESC, engine_count DESC''',
+               GROUP BY cu.id, cu.url, uf.relevance_score
+               ORDER BY relevance_score DESC, engine_count DESC''',
             (search_term_id, search_term_id, search_term_id)
         )
         return cursor.fetchall()
